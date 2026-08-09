@@ -39,7 +39,7 @@ export const MEDIDAS = {
 
   // interlínea holgada: con Anton, que es muy alta y condensada, un valor
   // apretado deja las líneas pegadas y los recuadros casi tocándose
-  titular:  { fuente: 260, interlinea: 1.38, abajo: 235 },
+  titular:  { fuente: 260, interlinea: 1.32, abajo: 235 },
 
   // el resaltado: caja de color con otra negra corrida por detrás
   // el resaltado: caja de color con otra negra corrida por detrás.
