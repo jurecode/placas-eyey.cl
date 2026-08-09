@@ -4,7 +4,7 @@
  * las placas y las fotos se guardan en MySQL a través de api/, así que son
  * las mismas desde cualquier dispositivo. */
 
-import { dibujarReel, esperarTipografias, LIENZO, REEL } from './placa.js';
+import { dibujarReel, esperarTipografias, textoSobre, LIENZO, REEL } from './placa.js';
 import * as somosPuerto from './placa.js';
 import * as eyey from './dibujo-eyey.js';
 import { MARCA } from './marca/marca.js';
@@ -27,8 +27,24 @@ const dibujarCierre = (ctx, datos, arte, lado, logo) =>
    La ruta por defecto no depende de lo que diga la marca: esa carpeta no se
    sobrescribe al actualizar, así que una marca vieja nunca se entera de un
    valor nuevo y el cierre desaparecía sin motivo visible. */
-const arteDelCierre = () =>
-  cargarImagen((typeof CIERRE === 'string' && CIERRE) ? CIERRE : 'marca/cierre.png');
+/* El arte del cierre viene en dos versiones, clara y oscura, porque una sola
+   no puede leerse sobre toda la paleta: la clara desaparece en el fondo
+   blanco y la oscura en el negro. Se elige por el mismo criterio con que se
+   decide el color del texto sobre un fondo.
+   Se aceptan varios nombres: el propio y el que suele traer el arte cuando lo
+   exporta el diseñador. Gana el primero que exista. */
+async function arteDelCierre(){
+  const claro = textoSobre(placa.color_fondo || '#000000') === '#ffffff';
+  const candidatos = claro
+    ? [(typeof CIERRE === 'string' && CIERRE) || '', 'marca/cierre.png', 'marca/final.png']
+    : ['marca/cierre-oscuro.png', 'marca/final.negro.png', 'marca/cierre.png', 'marca/final.png'];
+  for(const ruta of candidatos){
+    if(!ruta) continue;
+    const img = await cargarImagen(ruta);
+    if(img) return img;
+  }
+  return null;
+}
 
 /* ------------------------------------------------------------------ */
 /* catálogos                                                           */
@@ -327,7 +343,19 @@ const recurso = (ruta) => (/^(assets|marca)\//.test(String(ruta)) ? `${ruta}?v=$
 async function cargarImagen(ref){
   if(!ref) return null;
   if(cacheImg.has(ref)) return cacheImg.get(ref);
-  const url = recurso(ref);
+  let url = recurso(ref);
+
+  /* Los archivos de marca/ los reemplaza el propio medio subiéndolos por FTP,
+     sin que cambie la versión del sitio. Como el hosting los sirve con un año
+     de caché, el navegador seguía mostrando el anterior aunque el nuevo ya
+     estuviera arriba. Se piden de nuevo una vez por carga; dentro de la misma
+     sesión el que manda es el de memoria, así que no se baja dos veces. */
+  if(String(ref).startsWith('marca/')){
+    try{
+      const r = await fetch(url, { cache: 'reload' });
+      if(r.ok) url = URL.createObjectURL(await r.blob());
+    }catch(e){ /* sin red se sigue con la ruta de siempre */ }
+  }
   const img = await new Promise((listo) => {
     const i = new Image();
     i.onload = () => listo(i);
