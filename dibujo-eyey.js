@@ -107,12 +107,15 @@ function dibujarLinea(ctx, palabras, x, baseline, caja, px, inter, colores){
 
 /* La huincha de abajo: banda del color de la paleta, el «síguenos» a la
    izquierda y las flechas a la derecha. */
-function dibujarHuincha(ctx, datos, marca, u, lado){
+function dibujarHuincha(ctx, datos, marca, u, lado, invertida = false){
   const H = MEDIDAS.huincha;
   const alto = H.alto * u;
   const y = lado - alto;
-  const color = datos.color_fondo || '#ff0000';
-  const tinta = textoSobre(color);
+  const paleta = datos.color_fondo || '#ff0000';
+  // en el cierre el fondo ya es el color de la paleta: si la huincha fuera
+  // del mismo color desaparecería, así que ahí va al revés
+  const color = invertida ? textoSobre(paleta) : paleta;
+  const tinta = invertida ? paleta : textoSobre(paleta);
 
   ctx.fillStyle = color;
   ctx.fillRect(0, y, lado, alto);
@@ -243,4 +246,85 @@ export function dibujarLamina(ctx, datos, lamina, foto, logo, lado, marca = {}){
     ctx.drawImage(logo, MEDIDAS.margen * u, MEDIDAS.logo.arriba * u, ancho, alto);
   }
   dibujarHuincha(ctx, datos, marca, u, lado);
+}
+
+/* ------------------------------------------------------------------ */
+/* la lámina de cierre                                                 */
+/* ------------------------------------------------------------------ */
+
+/* El otro medio tiene su cierre dibujado como una imagen aparte. Acá se
+   arma con las mismas piezas de la placa —el logo, la letra condensada, la
+   huincha— así que cambia solo con la paleta y no hay un archivo que
+   mantener aparte. Si algún día llega el arte propio, se pone en marca/ y
+   este dibujo se reemplaza sin tocar nada más. */
+export function dibujarCierre(ctx, datos, arte, lado, marca = {}, logo = null){
+  const u = lado / LIENZO;
+  const color = datos.color_fondo || '#ff0000';
+  const tinta = textoSobre(color);
+
+  ctx.clearRect(0, 0, lado, lado);
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, lado, lado);
+  ctx.letterSpacing = '0px';
+  ctx.textBaseline = 'alphabetic';
+
+  // si algún día hay arte propio, manda ese y no se dibuja nada más
+  if(arte){
+    ctx.drawImage(arte, 0, 0, lado, lado);
+    return;
+  }
+
+  const centro = lado / 2;
+
+  // el logo, arriba del texto y pintado del color que se lea sobre el fondo
+  if(logo){
+    const alto = 420 * u;
+    const escala = alto / logo.height;
+    const ancho = logo.width * escala;
+    const x = centro - ancho / 2;
+    const y = lado * 0.30 - alto / 2;
+
+    const tinte = document.createElement('canvas');
+    tinte.width = Math.max(1, Math.round(ancho));
+    tinte.height = Math.max(1, Math.round(alto));
+    const tc = tinte.getContext('2d');
+    tc.drawImage(logo, 0, 0, tinte.width, tinte.height);
+    tc.globalCompositeOperation = 'source-in';
+    tc.fillStyle = tinta;
+    tc.fillRect(0, 0, tinte.width, tinte.height);
+    ctx.drawImage(tinte, x, y, ancho, alto);
+  }
+
+  // «SÍGUENOS Y COMPARTE», con la segunda línea sobre su caja, igual que el
+  // resaltado del titular
+  const px = 330 * u;
+  const met = metricas(ctx, TIPOS.titular, px);
+  const interlinea = px * 1.02;
+  const base = lado * 0.60;
+
+  ctx.font = fuente(TIPOS.titular, px);
+  ctx.fillStyle = tinta;
+  const uno = 'SIGUENOS';
+  ctx.fillText(uno, centro - ctx.measureText(uno).width / 2, base);
+
+  const dos = 'Y COMPARTE';
+  const anchoDos = ctx.measureText(dos).width;
+  const M = MEDIDAS.marca;
+  const padX = M.padX * u, padY = M.padY * u;
+  const x2 = centro - anchoDos / 2;
+  const y2 = base + interlinea;
+  const arriba = y2 - met.mayuscula - padY;
+  const altoCaja = met.mayuscula + padY * 2;
+
+  ctx.fillStyle = tinta === '#ffffff' ? '#000000' : '#ffffff';
+  ctx.fillRect(x2 - padX + M.sombraX * u, arriba + M.sombraY * u,
+    anchoDos + padX * 2, altoCaja);
+  ctx.fillStyle = tinta;
+  ctx.fillRect(x2 - padX, arriba, anchoDos + padX * 2, altoCaja);
+
+  ctx.fillStyle = color;
+  ctx.font = fuente(TIPOS.titular, px);
+  ctx.fillText(dos, x2, y2);
+
+  dibujarHuincha(ctx, datos, marca, u, lado, true);
 }

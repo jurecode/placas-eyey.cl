@@ -10,9 +10,11 @@ export const MARCA = {
   cuenta: '@eyey.cl',
 
   logo:   'marca/logo.png',
-  /* Todavía no hay lámina de cierre para este medio: vacío quiere decir que
-     el post termina en la última foto, sin firma al final. */
-  cierre: '',
+  /* La lámina de cierre la dibuja el propio dibujante con las piezas de la
+     marca, así cambia con la paleta y no hay un archivo que mantener. Si
+     algún día hay arte propio, se deja en marca/cierre.png y se pone acá esa
+     ruta en lugar de true. */
+  cierre: true,
 
   /* Lo que va en la huincha de abajo, a la izquierda de las flechas. */
   pie: 'SIGUENOS EYEY.CL',

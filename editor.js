@@ -4,7 +4,7 @@
  * las placas y las fotos se guardan en MySQL a través de api/, así que son
  * las mismas desde cualquier dispositivo. */
 
-import { dibujarCierre, dibujarReel, esperarTipografias, LIENZO, REEL } from './placa.js';
+import { dibujarReel, esperarTipografias, LIENZO, REEL } from './placa.js';
 import * as somosPuerto from './placa.js';
 import * as eyey from './dibujo-eyey.js';
 import { MARCA } from './marca/marca.js';
@@ -15,6 +15,13 @@ const DIBUJANTE = { 'eyey': eyey }[MARCA.dibujo] || somosPuerto;
 const dibujar = (ctx, datos, fotos, lado) => DIBUJANTE.dibujar(ctx, datos, fotos, lado, MARCA);
 const dibujarLamina = (ctx, datos, lamina, foto, logo, lado) =>
   DIBUJANTE.dibujarLamina(ctx, datos, lamina, foto, logo, lado, MARCA);
+
+/* El cierre puede ser una imagen —marca.cierre con una ruta— o dibujarse con
+   las piezas de la marca —marca.cierre en true—. El dibujante decide; acá
+   solo se le acerca el arte si lo hay, y el logo por si lo necesita. */
+const dibujarCierre = (ctx, datos, arte, lado, logo) =>
+  (DIBUJANTE.dibujarCierre || somosPuerto.dibujarCierre)(ctx, datos, arte, lado, MARCA, logo);
+const arteDelCierre = () => (typeof CIERRE === 'string' && CIERRE ? cargarImagen(CIERRE) : null);
 
 /* ------------------------------------------------------------------ */
 /* catálogos                                                           */
@@ -72,7 +79,7 @@ const MAX_LAMINAS = 8;   // 8 + la placa + el cierre = las 10 que permite Instag
 /* Todo post que no sea un reel termina con la lámina de cierre: el color de
    la paleta y el arte de «síguenos y comparte». Va sola, no se agrega a mano,
    y por eso ocupa uno de los diez lugares de Instagram. */
-const llevaCierre = () => placa.formato !== 'reel' && !!CIERRE;
+const llevaCierre = () => placa.formato !== 'reel' && CIERRE !== false && !!CIERRE;
 
 const EJEMPLO = {
   ...BASE,
@@ -409,7 +416,7 @@ function repintar(){
       if(vista === 0){
         dibujar(ctx, placa, await imagenesDe(placa), lienzo.width);
       }else if(conCierre && vista === ultima){
-        dibujarCierre(ctx, placa, await cargarImagen(CIERRE), lienzo.width);
+        dibujarCierre(ctx, placa, await arteDelCierre(), lienzo.width, await cargarImagen(LOGO));
       }else{
         const lam = laminas[vista - 1];
         dibujarLamina(ctx, placa, lam, await cargarImagen(lam.foto),
@@ -482,7 +489,7 @@ async function pintarTira(){
   }
   if(cierre){
     const ctx = botones[cuantas - 1].querySelector('canvas').getContext('2d');
-    dibujarCierre(ctx, placa, await cargarImagen(CIERRE), 160);
+    dibujarCierre(ctx, placa, await arteDelCierre(), 160, logo);
   }
 }
 
@@ -520,7 +527,7 @@ async function itemsParaPublicar(avisar){
   }
 
   if(cierre){
-    dibujarCierre(ctx, placa, await cargarImagen(CIERRE), 1080);
+    dibujarCierre(ctx, placa, await arteDelCierre(), 1080, logo);
     items.push({ tipo: 'imagen', dataUrl: await aDataUrl(await jpeg()) });
     avisar?.(1);
   }
@@ -543,7 +550,7 @@ async function archivosDelCarrusel(){
     archivos.push(new File([await jpeg()], `${baseNombre()}-${i + 2}.jpg`, { type: 'image/jpeg' }));
   }
   if(llevaCierre()){
-    dibujarCierre(ctx, placa, await cargarImagen(CIERRE), 1080);
+    dibujarCierre(ctx, placa, await arteDelCierre(), 1080, logo);
     archivos.push(new File([await jpeg()], `${baseNombre()}-cierre.jpg`, { type: 'image/jpeg' }));
   }
   return archivos;
