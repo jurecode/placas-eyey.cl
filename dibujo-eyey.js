@@ -37,7 +37,9 @@ export const MEDIDAS = {
   // pegada al borde derecho, como en el arte
   etiqueta: { fuente: 150, padX: 52, padY: 34, arriba: 330, margenDerecho: 70 },
 
-  titular:  { fuente: 260, interlinea: 1.04, abajo: 175 },
+  // interlínea holgada: con Anton, que es muy alta y condensada, un valor
+  // apretado deja las líneas pegadas y los recuadros casi tocándose
+  titular:  { fuente: 260, interlinea: 1.38, abajo: 235 },
 
   // el resaltado: caja de color con otra negra corrida por detrás
   // el resaltado: caja de color con otra negra corrida por detrás.
