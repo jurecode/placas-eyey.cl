@@ -1,0 +1,1643 @@
+/* Editor de placas.
+ *
+ * El dibujo y la exportación pasan enteros por el navegador (placa.js), y
+ * las placas y las fotos se guardan en MySQL a través de api/, así que son
+ * las mismas desde cualquier dispositivo. */
+
+import { dibujarCierre, dibujarReel, esperarTipografias, LIENZO, REEL } from './placa.js';
+import * as somosPuerto from './placa.js';
+import * as eyey from './dibujo-eyey.js';
+import { MARCA } from './marca/marca.js';
+
+/* Cada medio tiene su dibujante y la marca dice cuál. Lo que se le pasa de
+   más —el nombre, el pie— lo ignora el que no lo necesita. */
+const DIBUJANTE = { 'eyey': eyey }[MARCA.dibujo] || somosPuerto;
+const dibujar = (ctx, datos, fotos, lado) => DIBUJANTE.dibujar(ctx, datos, fotos, lado, MARCA);
+const dibujarLamina = (ctx, datos, lamina, foto, logo, lado) =>
+  DIBUJANTE.dibujarLamina(ctx, datos, lamina, foto, logo, lado, MARCA);
+
+/* ------------------------------------------------------------------ */
+/* catálogos                                                           */
+/* ------------------------------------------------------------------ */
+
+const DISENOS = [
+  { id: 'duo-circulo', nombre: 'Dos fotos + círculo',
+    svg: '<rect x="1" y="1" width="20" height="28" rx="3"/><rect x="23" y="1" width="20" height="28" rx="3"/><circle cx="22" cy="15" r="9" fill="currentColor" stroke="none" opacity=".85"/>' },
+  { id: 'duo', nombre: 'Dos fotos',
+    svg: '<rect x="1" y="1" width="20" height="28" rx="3"/><rect x="23" y="1" width="20" height="28" rx="3"/>' },
+  { id: 'unica', nombre: 'Una sola foto',
+    svg: '<rect x="1" y="1" width="42" height="28" rx="3"/>' },
+  { id: 'unica-circulo', nombre: 'Una foto + círculo',
+    svg: '<rect x="1" y="1" width="42" height="28" rx="3"/><circle cx="22" cy="15" r="9" fill="currentColor" stroke="none" opacity=".85"/>' },
+];
+
+/* Quién es el medio vive en marca/, que es lo único que cambia entre un
+   sitio y otro y lo único que el actualizador no toca. */
+const PALETA = MARCA.paleta;
+const ETIQUETAS = MARCA.etiquetas;
+const LOGO = MARCA.logo;
+const CIERRE = MARCA.cierre;
+
+const AJUSTES = [['completa', 'Completa', 'Entra entera, no se recorta'],
+                 ['cubrir', 'Rellenar', 'Llena el hueco y recorta lo que sobra']];
+
+const FOTOS_POR_DISENO = {
+  'duo-circulo':   [['foto_izq', 'Foto izquierda'], ['foto_der', 'Foto derecha'], ['foto_cen', 'Foto del círculo']],
+  'duo':           [['foto_izq', 'Foto izquierda'], ['foto_der', 'Foto derecha']],
+  'unica':         [['foto_izq', 'Foto de fondo']],
+  'unica-circulo': [['foto_izq', 'Foto de fondo'], ['foto_cen', 'Foto del círculo']],
+};
+
+const BASE = {
+  nombre: 'Placa nueva',
+  titulo: 'Titular de\nla noticia',
+  etiqueta: 'Noticia',
+  formato: 'noticia',
+  diseno: 'unica',
+  foto_izq: 'assets/marcador.jpg', foto_izq_x: 50, foto_izq_y: 50, foto_izq_ajuste: 'completa',
+  foto_der: 'assets/marcador.jpg', foto_der_x: 50, foto_der_y: 50, foto_der_ajuste: 'completa',
+  foto_cen: 'assets/marcador.jpg', foto_cen_x: 50, foto_cen_y: 50, foto_cen_ajuste: 'completa',
+  color_fondo: '#ff0054',
+  color_filete: '#0ae7ae',
+  circulo_x: 50, circulo_y: 62.6,
+  tam_titulo: 143,
+  laminas: [],            // fotos extra del carrusel; la placa es la primera
+  descripcion: '', hashtags: '', colaboradores: '', etiquetados: '',
+  // cada medio pisa lo que le corresponde: su cuerpo de letra, sus colores
+  ...(MARCA.predeterminados || {}),
+};
+
+const MAX_LAMINAS = 8;   // 8 + la placa + el cierre = las 10 que permite Instagram
+
+/* Todo post que no sea un reel termina con la lámina de cierre: el color de
+   la paleta y el arte de «síguenos y comparte». Va sola, no se agrega a mano,
+   y por eso ocupa uno de los diez lugares de Instagram. */
+const llevaCierre = () => placa.formato !== 'reel' && !!CIERRE;
+
+const EJEMPLO = {
+  ...BASE,
+  nombre: 'Ignacia Michelson',
+  titulo: 'Ignacia Michelson\nrecuerda su violenta\nrelación con el cantante\nmexicano Sargento Rap:\n"Me destruyó"',
+  foto_izq: 'assets/foto-izquierda.jpg',
+  foto_der: 'assets/foto-derecha.jpg',
+  foto_cen: 'assets/foto-central.jpg',
+};
+
+const REELS = {
+  ...BASE,
+  formato: 'reel',
+  titulo: 'Titular del\nreel',
+  video: '', portada: '',
+};
+
+const URGENTE = {
+  ...BASE,
+  formato: 'urgente',
+  titulo: 'Ahora',
+  color_fondo: '#ee0008',
+  tam_titulo: 900,
+};
+
+/* ------------------------------------------------------------------ */
+/* almacén: MySQL a través de api/                                     */
+/* ------------------------------------------------------------------ */
+
+/* La clave viaja en una cabecera y queda solo en este navegador. Se pide en
+   una pantalla propia y no con prompt(), que bloquea la página y encima no
+   existe en todos los navegadores. */
+const clave = () => localStorage.getItem('clave_publicar') || '';
+
+async function api(ruta, opciones = {}){
+  const res = await fetch(ruta, {
+    ...opciones,
+    headers: { 'x-clave': clave(), ...(opciones.headers || {}) },
+  });
+  const datos = await res.json().catch(() => ({}));
+  if(res.status === 401){
+    localStorage.removeItem('clave_publicar');
+    pantallaClave('La clave no es la correcta.');
+    // se marca para que el arranque no tape la pantalla de la clave con
+    // la de error genérico
+    const e = new Error(datos.error || 'Clave incorrecta');
+    e.esClave = true;
+    throw e;
+  }
+  if(!res.ok) throw new Error(datos.error || `Error ${res.status}`);
+  if(datos && datos.error) throw new Error(datos.error);
+  return datos;
+}
+
+const listarPlacas  = () => api('api/placas.php').then((d) => d.placas || []);
+const leerPlaca     = (id) => api('api/placas.php?id=' + id);
+const borrarPlacaBd = (id) => api('api/placas.php?id=' + id, { method: 'DELETE' });
+
+const escribirPlaca = (p) => api('api/placas.php', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ clave: clave(), placa: p }),
+});
+
+/* Los videos van de a pedazos: de una sola vez chocaban contra el límite del
+   hosting o se cortaban en una conexión móvil, y el editor se quedaba
+   esperando para siempre. Cada trozo lleva su propio plazo, así que una
+   conexión muerta falla en un minuto en vez de nunca. */
+const TROZO = 2 * 1024 * 1024;
+const ENTERO_HASTA = 4 * 1024 * 1024;
+const PLAZO_TROZO = 90_000;
+/* Sin esto PHP intenta leer el binario como si fuera un formulario y ensucia
+   la respuesta con avisos que rompen el JSON. */
+const BINARIO = { 'Content-Type': 'application/octet-stream' };
+
+async function conPlazo(ruta, opciones, ms){
+  const corte = new AbortController();
+  const reloj = setTimeout(() => corte.abort(), ms);
+  try{
+    return await api(ruta, { ...opciones, signal: corte.signal });
+  }catch(e){
+    if(e.name === 'AbortError'){
+      throw new Error('El servidor no contestó a tiempo. Puede ser la conexión: probá de nuevo.');
+    }
+    throw e;
+  }finally{ clearTimeout(reloj); }
+}
+
+async function guardarFoto(archivo, avisar){
+  if(archivo.size <= ENTERO_HASTA){
+    return conPlazo('api/fotos.php',
+      { method: 'POST', body: archivo, headers: BINARIO }, PLAZO_TROZO);
+  }
+  const sesion = (crypto.randomUUID?.() || Math.random().toString(36) + Date.now())
+    .replace(/[^a-zA-Z0-9]/g, '');
+  let enviado = 0;
+  for(let desde = 0; desde < archivo.size; desde += TROZO){
+    const pedazo = archivo.slice(desde, desde + TROZO);
+    const ultimo = desde + TROZO >= archivo.size;
+    const r = await conPlazo(
+      `api/fotos.php?trozo=1&sesion=${sesion}${ultimo ? '&fin=1' : ''}`,
+      { method: 'POST', body: pedazo, headers: BINARIO }, PLAZO_TROZO);
+    enviado += pedazo.size;
+    avisar?.(enviado / archivo.size);
+    if(ultimo) return r;
+  }
+  throw new Error('El archivo llegó vacío');
+}
+
+/* ------------------------------------------------------------------ */
+/* estado                                                              */
+/* ------------------------------------------------------------------ */
+
+let placa = null;
+let guardando = null;
+let vista = 0;   // 0 = la placa; 1..n = las fotos del carrusel
+const cacheImg = new Map();
+
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => String(s).replace(/[&<>"]/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* El hosting servía el HTML con meses de caché, así que el navegador podía
+   quedarse con un index.html viejo y este editor.js nuevo. Esa mezcla rompía
+   todo: el código busca cosas que en ese HTML todavía no existen. Si falta
+   una pieza que este archivo da por hecha, se recarga una sola vez con la
+   dirección cambiada, que es lo único que saltea la copia guardada. */
+(function refrescarSiElHtmlEsViejo(){
+  if(document.getElementById('trabajando')){
+    sessionStorage.removeItem('html_refrescado');   // van juntos: nada que hacer
+    return;
+  }
+  if(sessionStorage.getItem('html_refrescado')) return;   // ya se intentó, no dar vueltas
+  sessionStorage.setItem('html_refrescado', '1');
+  location.replace(location.pathname + '?v=' + Date.now());
+})();
+
+/* ------------------------------------------------------------------ */
+/* la vista previa en el teléfono                                      */
+/* ------------------------------------------------------------------ */
+
+/* Con el teclado abierto, la vista previa entera no dejaba lugar para el
+   campo que se estaba escribiendo. Mientras se escribe se achica y se guarda
+   lo que no sirve en ese momento; al terminar, vuelve. */
+const esCampo = (el) => el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+
+document.addEventListener('focusin', (ev) => {
+  if(!esCampo(ev.target)) return;
+  document.body.classList.add('escribiendo');
+  // ya achicada la vista, el campo puede haber quedado debajo del teclado
+  setTimeout(() => ev.target.scrollIntoView({ block: 'center', behavior: 'smooth' }), 250);
+});
+
+document.addEventListener('focusout', (ev) => {
+  if(!esCampo(ev.target)) return;
+  // si el foco salta de un campo a otro, no vale la pena agrandar y achicar
+  setTimeout(() => {
+    if(!esCampo(document.activeElement)) document.body.classList.remove('escribiendo');
+  }, 120);
+});
+
+function verVista(mostrar){
+  document.body.classList.toggle('sin_vista', !mostrar);
+  localStorage.setItem('sin_vista', mostrar ? '' : '1');
+}
+$('#encoger')?.addEventListener('click', () => verVista(false));
+$('#mostrar_vista')?.addEventListener('click', () => verVista(true));
+if(localStorage.getItem('sin_vista')) verVista(false);
+
+function estado(texto, esError){
+  const el = $('#estado');
+  if(!el) return;
+  el.textContent = texto;
+  el.classList.toggle('error', !!esError);
+}
+
+/* Lo que tarda se muestra en grande, tapando el editor: quemar un video
+   lleva lo que dura el video y con el aviso chico de abajo parecía colgado.
+   `avance` es 0..1 cuando se puede medir; sin número la barra va y viene.
+   Se cierra con cerrarTrabajo(), siempre desde un finally. */
+/* Procesar un video puede tardar minutos y el aviso tapa la pantalla. Sin
+   una salida, cualquier atasco dejaba el editor trabado hasta recargar. */
+let pedidoCortar = false;
+const cortaron = () => pedidoCortar;
+$('#cortar_trabajo')?.addEventListener('click', () => {
+  pedidoCortar = true;
+  trabajo('Cortando…', null, 'Termina en unos segundos.');
+});
+
+function trabajo(texto, avance, pista){
+  const caja = $('#trabajando');
+  // si el HTML es viejo no hay dónde mostrarlo: se avisa abajo y se sigue
+  if(!caja){
+    return estado(texto + (typeof avance === 'number' ? ` ${Math.round(avance * 100)}%` : '…'));
+  }
+  if(caja.hidden){
+    pedidoCortar = false;                 // arranca un trabajo nuevo
+    caja.querySelector('.trabajando__riel').hidden = false;
+    $('#cortar_trabajo').textContent = 'Cancelar';
+  }
+  caja.hidden = false;
+  $('#trabajando_que').textContent = texto;
+  const medible = typeof avance === 'number' && isFinite(avance);
+  const pct = $('#trabajando_pct');
+  pct.hidden = !medible;
+  if(medible) pct.textContent = Math.round(Math.min(1, Math.max(0, avance)) * 100) + '%';
+  const barra = $('#trabajando_barra');
+  barra.classList.toggle('sinmedida', !medible);
+  barra.style.width = medible ? Math.round(avance * 100) + '%' : '';
+  if(pista !== undefined) $('#trabajando_pista').textContent = pista || '';
+}
+
+function cerrarTrabajo(){
+  const caja = $('#trabajando');
+  if(caja) caja.hidden = true;
+}
+
+/* Un problema que hay que ver sí o sí. Sin esto, perder el video se avisaba
+   en una línea de 11 px al pie del panel, que en el teléfono ni se ve. */
+function aviso(titulo, detalle){
+  const caja = $('#trabajando');
+  if(!caja) return estado(titulo + ': ' + detalle, true);
+  trabajo(titulo, null, detalle);
+  caja.querySelector('.trabajando__riel').hidden = true;
+  $('#cortar_trabajo').textContent = 'Entendido';
+}
+
+/* El hosting sirve las imágenes con un año de caché y no hace caso al
+   .htaccess, así que un logo cambiado seguía viéndose viejo en el teléfono
+   por más que se actualizara el sitio. Se les cuelga el número de versión:
+   para el navegador es otra dirección y la pide de nuevo.
+   Las fotos subidas no lo llevan: cada una tiene su propio nombre y nunca
+   cambia de contenido. */
+const VERSION = 'dev';   // el paquete la reemplaza por el número de la versión
+const recurso = (ruta) => (/^(assets|marca)\//.test(String(ruta)) ? `${ruta}?v=${VERSION}` : ruta);
+
+/* Las fotos son rutas del propio sitio ("assets/…" o "fotos/…"). */
+async function cargarImagen(ref){
+  if(!ref) return null;
+  if(cacheImg.has(ref)) return cacheImg.get(ref);
+  const url = recurso(ref);
+  const img = await new Promise((listo) => {
+    const i = new Image();
+    i.onload = () => listo(i);
+    i.onerror = () => listo(null);
+    i.src = url;
+  });
+  cacheImg.set(ref, img);
+  return img;
+}
+
+async function imagenesDe(p){
+  const [izq, der, cen, logo] = await Promise.all([
+    cargarImagen(p.foto_izq), cargarImagen(p.foto_der),
+    cargarImagen(p.foto_cen), cargarImagen(LOGO),
+  ]);
+  return { izq, der, cen, logo };
+}
+
+/* ------------------------------------------------------------------ */
+/* dibujo                                                              */
+/* ------------------------------------------------------------------ */
+
+let pendiente = null;
+let bucleReel = null;   // redibuja la capa de texto mientras el reel se mueve
+
+/* Se juntan varios cambios seguidos en un solo dibujo. Con setTimeout y no
+   con requestAnimationFrame a propósito: rAF no corre si la pestaña está
+   en segundo plano y la vista previa quedaría congelada. */
+function repintar(){
+  clearTimeout(pendiente);
+  clearInterval(bucleReel);   // si había una capa animándose, se rearma abajo
+  bucleReel = null;
+  pendiente = setTimeout(async () => {
+    try{
+      const lienzo = $('#previa');
+      const esReel = placa.formato === 'reel';
+      // el reel es 9:16, así que el lienzo cambia de forma
+      const anchoQuiere = esReel ? REEL.ancho : 1080;
+      const altoQuiere  = esReel ? REEL.alto : 1080;
+      if(lienzo.width !== anchoQuiere || lienzo.height !== altoQuiere){
+        lienzo.width = anchoQuiere;
+        lienzo.height = altoQuiere;
+        lienzo.style.aspectRatio = `${anchoQuiere} / ${altoQuiere}`;
+      }
+      const ctx = lienzo.getContext('2d');
+      /* El video se guarda crudo y el texto se dibuja encima, así se ve
+         cambiar mientras se escribe. Las placas hechas antes traen el video
+         ya quemado (sin reel_crudo): esas se muestran tal cual, porque si
+         no el titular saldría dos veces.
+         El reproductor puede faltar si el navegador se quedó con un
+         index.html viejo en la caché: ahí se dibuja el lienzo y ya. */
+      const reproductor = $('#previa_video');
+      const fuente = esReel ? fuenteDelReel() : '';
+      const conVideo = esReel && !!fuente && !!reproductor;
+      const crudo = conVideo && !!placa.reel_crudo;
+      // el lienzo nunca se esconde: es lo que le da tamaño al marco, y el
+      // video va estirado por debajo
+      if(reproductor){
+        reproductor.hidden = !conVideo;
+        if(conVideo && !reproductor.src.endsWith(fuente)){
+          reproductor.src = fuente;
+          reproductor.play().catch(() => {});
+        }
+        if(!conVideo && reproductor.src){ reproductor.pause(); reproductor.removeAttribute('src'); }
+      }
+      if(esReel){
+        if(crudo){
+          const logo = await cargarImagen(LOGO);
+          // solo se redibuja cuando el momento de la animación cambió: pasado
+          // el primer segundo la capa queda quieta y no gasta nada
+          let ultimo = -1;
+          const encima = () => {
+            const a = Math.min(1, (reproductor.currentTime || 0) / ANIMACION);
+            if(a === ultimo) return;
+            ultimo = a;
+            dibujarReel(ctx, placa, null, logo, REEL.ancho, REEL.alto, a, true);
+          };
+          encima();
+          bucleReel = setInterval(encima, 80);
+        }else if(conVideo){
+          ctx.clearRect(0, 0, lienzo.width, lienzo.height);   // ya viene quemado
+        }else{
+          dibujarReel(ctx, placa, await cargarImagen(placa.portada),
+            await cargarImagen(LOGO), REEL.ancho, REEL.alto, 1);
+        }
+        await pintarTira();
+        return;
+      }
+      const laminas = placa.laminas || [];
+      const conCierre = llevaCierre() && laminas.length + 2 <= 10;
+      const ultima = laminas.length + (conCierre ? 1 : 0);
+      if(vista > ultima) vista = 0;
+      if(vista === 0){
+        dibujar(ctx, placa, await imagenesDe(placa), lienzo.width);
+      }else if(conCierre && vista === ultima){
+        dibujarCierre(ctx, placa, await cargarImagen(CIERRE), lienzo.width);
+      }else{
+        const lam = laminas[vista - 1];
+        dibujarLamina(ctx, placa, lam, await cargarImagen(lam.foto),
+          await cargarImagen(LOGO), lienzo.width);
+      }
+      await pintarTira();
+    }catch(e){
+      estado('No se pudo dibujar: ' + e.message, true);
+      console.error(e);
+    }
+  }, 16);
+}
+
+function bajar(blob, nombre){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = nombre;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+const baseNombre = () => (placa.nombre || 'placa').toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'placa';
+
+/* Instagram solo acepta JPEG, así que el carrusel sale en ese formato y a
+   1080, que es el tamaño con que muestra el feed. */
+/* Miniaturas de todas las láminas, en orden, como van a salir en el feed. */
+async function pintarTira(){
+  const laminas = placa.laminas || [];
+  const tira = $('#tira');
+  if(placa.formato === 'reel'){
+    $('#rotulo_tira').textContent = fuenteDelReel() ? 'Reel · un video vertical' : 'Reel · falta el video';
+    tira.innerHTML = '';
+    const compartirR = $('#compartir');
+    if(compartirR) compartirR.hidden = true;
+    return;
+  }
+  const compartir = $('#compartir');
+  if(compartir) compartir.hidden = !navigator.canShare;
+
+  // el cierre va siempre al final, y se muestra acá para que no sea una
+  // sorpresa al publicar: lo que se ve en la tira es lo que sale
+  const cierre = llevaCierre() && laminas.length + 2 <= 10;
+  const cuantas = laminas.length + 1 + (cierre ? 1 : 0);
+
+  // Se muestra siempre, aunque haya una sola lámina: es la vista del post
+  // completo, y escondiéndola no se entendía que el carrusel existe.
+  $('#rotulo_tira').textContent = laminas.length
+    ? `El carrusel · ${cuantas} de 10` + (cierre ? ', con el cierre' : '')
+    : (cierre ? 'La placa y el cierre' : 'Una sola imagen')
+      + ' · agregá fotos o videos para armar un carrusel';
+
+  if(tira.children.length !== cuantas){
+    tira.innerHTML = Array.from({ length: cuantas }, (_, i) => {
+      const esCierre = cierre && i === cuantas - 1;
+      const titulo = esCierre ? 'El cierre' : (i ? 'Lámina ' + (i + 1) : 'La placa');
+      return `<button data-vista="${i}" title="${titulo}">
+         <canvas width="160" height="160"></canvas><i>${i + 1}</i>
+       </button>`;
+    }).join('');
+  }
+  const logo = await cargarImagen(LOGO);
+  const botones = [...tira.children];
+  botones.forEach((b, i) => b.classList.toggle('activa', i === vista));
+  const ctx0 = botones[0].querySelector('canvas').getContext('2d');
+  dibujar(ctx0, placa, await imagenesDe(placa), 160);
+  for(let i = 0; i < laminas.length; i++){
+    const ctx = botones[i + 1].querySelector('canvas').getContext('2d');
+    dibujarLamina(ctx, placa, laminas[i], await cargarImagen(laminas[i].foto), logo, 160);
+  }
+  if(cierre){
+    const ctx = botones[cuantas - 1].querySelector('canvas').getContext('2d');
+    dibujarCierre(ctx, placa, await cargarImagen(CIERRE), 160);
+  }
+}
+
+/* Genera las láminas como archivos JPEG en memoria. */
+/* Lo que se manda a publicar: la placa y las imágenes se generan acá, los
+   videos ya están en el servidor desde que se subieron. */
+async function itemsParaPublicar(avisar){
+  const laminas = placa.laminas || [];
+  // el cierre entra si queda lugar: los diez de Instagram son un tope duro y
+  // vale más el contenido que la firma
+  const cierre = llevaCierre() && laminas.length + 2 <= 10;
+  const total = laminas.length + 1 + (cierre ? 1 : 0);
+  const lienzo = document.createElement('canvas');
+  lienzo.width = lienzo.height = 1080;
+  const ctx = lienzo.getContext('2d');
+  const logo = await cargarImagen(LOGO);
+  const jpeg = () => new Promise((r) => lienzo.toBlob(r, 'image/jpeg', 0.92));
+  const aDataUrl = (blob) => new Promise((r) => {
+    const l = new FileReader(); l.onload = () => r(l.result); l.readAsDataURL(blob);
+  });
+
+  const items = [];
+  dibujar(ctx, placa, await imagenesDe(placa), 1080);
+  items.push({ tipo: 'imagen', dataUrl: await aDataUrl(await jpeg()) });
+  avisar?.(1 / total);
+
+  for(const lam of laminas){
+    if(lam.tipo === 'video'){
+      items.push({ tipo: 'video', ruta: lam.video });
+    }else{
+      dibujarLamina(ctx, placa, lam, await cargarImagen(lam.foto), logo, 1080);
+      items.push({ tipo: 'imagen', dataUrl: await aDataUrl(await jpeg()) });
+    }
+    avisar?.(items.length / total);
+  }
+
+  if(cierre){
+    dibujarCierre(ctx, placa, await cargarImagen(CIERRE), 1080);
+    items.push({ tipo: 'imagen', dataUrl: await aDataUrl(await jpeg()) });
+    avisar?.(1);
+  }
+  return items;
+}
+
+async function archivosDelCarrusel(){
+  const laminas = placa.laminas || [];
+  const lienzo = document.createElement('canvas');
+  lienzo.width = lienzo.height = 1080;
+  const ctx = lienzo.getContext('2d');
+  const logo = await cargarImagen(LOGO);
+  const jpeg = () => new Promise((r) => lienzo.toBlob(r, 'image/jpeg', 0.92));
+
+  const archivos = [];
+  dibujar(ctx, placa, await imagenesDe(placa), 1080);
+  archivos.push(new File([await jpeg()], `${baseNombre()}-1.jpg`, { type: 'image/jpeg' }));
+  for(let i = 0; i < laminas.length; i++){
+    dibujarLamina(ctx, placa, laminas[i], await cargarImagen(laminas[i].foto), logo, 1080);
+    archivos.push(new File([await jpeg()], `${baseNombre()}-${i + 2}.jpg`, { type: 'image/jpeg' }));
+  }
+  if(llevaCierre()){
+    dibujarCierre(ctx, placa, await cargarImagen(CIERRE), 1080);
+    archivos.push(new File([await jpeg()], `${baseNombre()}-cierre.jpg`, { type: 'image/jpeg' }));
+  }
+  return archivos;
+}
+
+async function exportarCarrusel(){
+  const archivos = await archivosDelCarrusel();
+  for(const archivo of archivos){
+    bajar(archivo, archivo.name);
+    await new Promise((r) => setTimeout(r, 350));   // si van de golpe el navegador las bloquea
+  }
+  return archivos.length;
+}
+
+function armarCaption(){
+  const partes = [String(placa.descripcion || '').trim()];
+  const tags = String(placa.hashtags || '').trim();
+  if(tags) partes.push(tags);
+  return partes.filter(Boolean).join('\n\n');
+}
+
+async function exportarPng(lado){
+  const lienzo = document.createElement('canvas');
+  lienzo.width = lienzo.height = lado;
+  dibujar(lienzo.getContext('2d'), placa, await imagenesDe(placa), lado);
+  bajar(await new Promise((r) => lienzo.toBlob(r, 'image/png')), `${baseNombre()}-${lado}px.png`);
+}
+
+/* ------------------------------------------------------------------ */
+/* controles                                                           */
+/* ------------------------------------------------------------------ */
+
+function pintarDisenos(){
+  $('#disenos').innerHTML = DISENOS.map((d) => `
+    <button data-diseno="${d.id}" title="${d.nombre}">
+      <svg viewBox="0 0 44 30" fill="none" stroke="currentColor" stroke-width="2">${d.svg}</svg>
+      ${d.nombre}
+    </button>`).join('');
+}
+
+function pintarPaleta(){
+  $('#paleta').innerHTML = PALETA.map((c, i) => `
+    <button class="muestra${c.original ? ' original' : ''}" data-paleta="${i}" title="${c.nombre}">
+      <span class="par"><i style="background:${c.fondo}"></i><i style="background:${c.filete}"></i></span>
+      <span>${c.nombre}</span>
+    </button>`).join('');
+}
+
+function pintarChips(){
+  $('#chips_etiqueta').innerHTML =
+    ETIQUETAS.map((t) => `<button data-etiqueta="${t}">${t}</button>`).join('') +
+    '<button data-etiqueta="">Sin etiqueta</button>';
+}
+
+async function pintarFotos(){
+  if(placa.formato === 'reel'){
+    const fuente = fuenteDelReel();
+    const miniatura = fuente
+      ? `<video src="${esc(fuente)}#t=0.5" muted playsinline preload="metadata"></video>`
+      : `<img src="${recurso('assets/marcador.jpg')}" alt="">`;
+    $('#fotos').innerHTML = `
+      <div class="foto" data-reel>
+        ${miniatura}
+        <div class="cuerpo">
+          <b>Video del reel</b>
+          <button type="button" class="archivo"
+                  onclick="this.parentNode.querySelector('input').click()">${fuente ? 'Cambiar video…' : 'Elegir video…'}</button>
+          <input type="file" accept="video/mp4,video/quicktime" data-reel-video>
+          <p class="nota" id="estado_video"></p>
+          <p class="nota">
+            Vertical, hasta 90 segundos. El titular entra animado en el primer
+            segundo y se le graba encima al publicar, así que podés seguir
+            cambiando el texto hasta el final.
+          </p>
+        </div>
+      </div>`;
+    return;
+  }
+  const slots = FOTOS_POR_DISENO[placa.diseno] || FOTOS_POR_DISENO['duo-circulo'];
+  $('#fotos').innerHTML = slots.map(([campo, etiqueta]) => `
+    <div class="foto" data-campo="${campo}">
+      <img alt="">
+      <div class="cuerpo">
+        <b>${etiqueta}</b>
+        <button type="button" class="archivo"
+                onclick="this.parentNode.querySelector('input').click()">Cambiar foto…</button>
+        <input type="file" accept="image/*" data-foto="${campo}">
+        <div class="ajuste">${AJUSTES.map(([id, n, ayuda]) =>
+          `<button data-ajuste="${campo}_ajuste:${id}" title="${ayuda}">${n}</button>`).join('')}</div>
+        <div class="encuadre">
+          <span>X</span><input type="range" data-campo="${campo}_x" min="0" max="100" step="1" value="${placa[campo + '_x']}">
+          <span>Y</span><input type="range" data-campo="${campo}_y" min="0" max="100" step="1" value="${placa[campo + '_y']}">
+        </div>
+        ${campo === 'foto_cen' ? `
+        <b class="sub">Posición del círculo</b>
+        <div class="encuadre">
+          <span>X</span><input type="range" data-campo="circulo_x" min="8" max="92" step="0.5" value="${placa.circulo_x ?? 50}">
+          <span>Y</span><input type="range" data-campo="circulo_y" min="8" max="92" step="0.5" value="${placa.circulo_y ?? 62.6}">
+        </div>` : ''}
+      </div>
+    </div>`).join('');
+  for(const [campo] of slots){
+    const img = await cargarImagen(placa[campo]);
+    const destino = document.querySelector(`.foto[data-campo="${campo}"] img`);
+    if(img && destino) destino.src = img.src;
+  }
+  marcarSeleccion();
+}
+
+async function pintarLaminas(){
+  const laminas = placa.laminas || [];
+  $('#laminas').innerHTML = laminas.map((lam, i) => `
+    <div class="foto" data-lamina="${i}">
+      <img alt="">
+      <div class="cuerpo">
+        <b>${lam.tipo === 'video' ? 'Video' : 'Foto'} ${i + 2} del carrusel</b>
+        <button type="button" class="archivo"
+                onclick="this.parentNode.querySelector('input').click()">Cambiar…</button>
+        <button type="button" class="archivo" data-quitar="${i}">Quitar</button>
+        <input type="file" accept="image/*,video/mp4,video/quicktime" data-lamina-foto="${i}">
+        ${lam.tipo === 'video' ? '<p class="nota">Ya quedó con el logo quemado.</p>' :
+          `<div class="ajuste">${AJUSTES.map(([id, n, ayuda]) =>
+            `<button data-lamina-ajuste="${i}:${id}" title="${ayuda}">${n}</button>`).join('')}</div>`}
+      </div>
+    </div>`).join('') || '<p class="nota">Solo la placa. Agregá fotos para armar un carrusel.</p>';
+
+  for(let i = 0; i < laminas.length; i++){
+    const img = await cargarImagen(laminas[i].foto);
+    const destino = document.querySelector(`[data-lamina="${i}"] img`);
+    if(img && destino) destino.src = img.src;
+  }
+  $('#agregar_lamina').disabled = laminas.length >= MAX_LAMINAS;
+  $('#cuantas').textContent = laminas.length + 1;
+  document.querySelectorAll('[data-lamina-ajuste]').forEach((b) => {
+    const [i, valor] = b.dataset.laminaAjuste.split(':');
+    b.classList.toggle('activo', (laminas[i].ajuste || 'completa') === valor);
+  });
+}
+
+function marcarSeleccion(){
+  document.querySelectorAll('[data-diseno]').forEach((b) =>
+    b.classList.toggle('activo', b.dataset.diseno === placa.diseno));
+  document.querySelectorAll('[data-ajuste]').forEach((b) => {
+    const [campo, valor] = b.dataset.ajuste.split(':');
+    b.classList.toggle('activo', placa[campo] === valor);
+  });
+  document.querySelectorAll('[data-paleta]').forEach((b) => {
+    const c = PALETA[Number(b.dataset.paleta)];
+    b.classList.toggle('activa',
+      c.fondo.toLowerCase() === String(placa.color_fondo).toLowerCase());
+  });
+}
+
+async function volcarControles(){
+  document.querySelectorAll('[data-campo]').forEach((el) => {
+    const v = placa[el.dataset.campo];
+    if(v !== undefined && el.tagName !== 'DIV') el.value = v;
+  });
+  await pintarFotos();
+  await pintarLaminas();
+}
+
+async function pintarSelector(){
+  const lista = await listarPlacas();
+  $('#selector').innerHTML = lista.map((p) => {
+    const fecha = String(p.actualizada || '').replace('T', ' ').slice(5, 16);
+    return `<option value="${p.id}"${p.id === placa.id ? ' selected' : ''}>${esc(p.nombre)} — ${fecha}</option>`;
+  }).join('');
+  $('#cual').textContent = placa.nombre;
+}
+
+/* ------------------------------------------------------------------ */
+/* cargar y guardar                                                    */
+/* ------------------------------------------------------------------ */
+
+const nombrar = (titulo) =>
+  String(titulo).split('\n').map((l) => l.trim()).find(Boolean)?.slice(0, 60) || 'Placa sin título';
+
+async function cargar(id){
+  // el archivo local y lo ya grabado son de la placa que se estaba editando:
+  // sin soltarlos, la siguiente mostraría el video de la anterior
+  if(videoLocal){ URL.revokeObjectURL(videoLocal); videoLocal = null; }
+  subiendoVideo = null;
+  ultimoQuemado = null;
+
+  placa = await leerPlaca(id);
+  localStorage.setItem('placa', id);
+  document.body.dataset.formato = placa.formato;
+  const esReel = placa.formato === 'reel';
+  // en un reel no hay imágenes que bajar, hay un video
+  $('#bajar_reel').hidden = !esReel;
+  $('#bajar_carrusel').hidden = esReel;
+  document.querySelectorAll('[data-exportar]').forEach((b) => { b.hidden = esReel; });
+  const urgente = placa.formato === 'urgente';
+  $('#leg_titular').textContent = urgente ? 'Descripción' : 'Titular';
+  $('#lab_titulo').textContent = urgente
+    ? 'Lo único editable: se estira sola hasta llenar el ancho'
+    : 'Un salto de línea = una línea en la placa';
+  await volcarControles();
+  await pintarSelector();
+  $('#portada').hidden = true;
+  repintar();
+  pintarCola();
+  estado('');
+}
+
+function cambio(campo, valor){
+  placa[campo] = valor;
+  repintar();
+  marcarSeleccion();
+  clearTimeout(guardando);
+  guardando = setTimeout(async () => {
+    try{
+      const r = await escribirPlaca(placa);
+      placa.id = r.id;
+      placa.nombre = r.nombre;
+      await pintarSelector();
+      estado('Guardado ' + new Date().toLocaleTimeString('es-CL'));
+    }catch(e){ estado('No se pudo guardar: ' + e.message, true); }
+  }, 400);
+}
+
+async function crear(datos){
+  const nueva = { ...datos };
+  delete nueva.id;
+  return (await escribirPlaca(nueva)).id;
+}
+
+/* ------------------------------------------------------------------ */
+/* eventos                                                             */
+/* ------------------------------------------------------------------ */
+
+document.addEventListener('input', (ev) => {
+  const el = ev.target;
+  if(el.dataset.campo && el.tagName !== 'DIV'){
+    let v = el.value;
+    if(el.type === 'number' || el.type === 'range') v = parseFloat(v);
+    cambio(el.dataset.campo, v);
+    const pick = $('#' + el.dataset.campo + '_pick');
+    if(pick && /^#[0-9a-f]{6}$/i.test(v)) pick.value = v;
+  }
+});
+
+document.addEventListener('click', async (ev) => {
+  const boton = ev.target.closest('[data-diseno], [data-paleta], [data-etiqueta], [data-ajuste]');
+  if(!boton) return;
+  if(boton.dataset.diseno){ cambio('diseno', boton.dataset.diseno); await pintarFotos(); return; }
+  if(boton.dataset.ajuste){
+    const [campo, valor] = boton.dataset.ajuste.split(':');
+    return cambio(campo, valor);
+  }
+  if(boton.dataset.paleta !== undefined){
+    const c = PALETA[Number(boton.dataset.paleta)];
+    placa.color_filete = c.filete;
+    return cambio('color_fondo', c.fondo);
+  }
+  if(boton.dataset.etiqueta !== undefined){
+    $('#etiqueta').value = boton.dataset.etiqueta;
+    cambio('etiqueta', boton.dataset.etiqueta);
+  }
+});
+
+$('#agregar_lamina').addEventListener('click', async () => {
+  placa.laminas = (placa.laminas || []).concat(
+    { foto: 'assets/marcador.jpg', ajuste: 'completa', x: 50, y: 50 });
+  cambio('laminas', placa.laminas);
+  await pintarLaminas();
+});
+
+document.addEventListener('click', async (ev) => {
+  const quitar = ev.target.closest('[data-quitar]');
+  if(quitar){
+    placa.laminas.splice(Number(quitar.dataset.quitar), 1);
+    cambio('laminas', placa.laminas);
+    return pintarLaminas();
+  }
+  const ajuste = ev.target.closest('[data-lamina-ajuste]');
+  if(ajuste){
+    const [i, valor] = ajuste.dataset.laminaAjuste.split(':');
+    placa.laminas[i].ajuste = valor;
+    cambio('laminas', placa.laminas);
+    return pintarLaminas();
+  }
+});
+
+$('#tira').addEventListener('click', (ev) => {
+  const boton = ev.target.closest('[data-vista]');
+  if(!boton) return;
+  vista = Number(boton.dataset.vista);
+  repintar();
+});
+
+/* En el celular esto abre la hoja de compartir del sistema con las imágenes
+   ya listas: se elige Instagram y se pega el texto. Si el navegador no lo
+   soporta (escritorio, casi siempre), se bajan los archivos. */
+$('#compartir').addEventListener('click', async (ev) => {
+  ev.target.disabled = true;
+  trabajo('Preparando las imágenes', null);
+  try{
+    const archivos = await archivosDelCarrusel();
+    cerrarTrabajo();   // lo que sigue es la hoja del sistema: estorbaba taparla
+    const texto = armarCaption();
+    if(navigator.canShare && navigator.canShare({ files: archivos })){
+      await navigator.share({ files: archivos, text: texto });
+      estado('Compartido');
+    }else{
+      for(const a of archivos){ bajar(a, a.name); await new Promise((r) => setTimeout(r, 350)); }
+      estado('Tu navegador no comparte archivos: se descargaron ' + archivos.length);
+    }
+  }catch(e){
+    if(e.name !== 'AbortError') estado(e.message, true);
+    else estado('');
+  }
+  finally{ cerrarTrabajo(); }
+  ev.target.disabled = false;
+});
+
+$('#publicar').addEventListener('click', async (ev) => {
+  // sin descripción no se publica: un post vacío no se puede editar después
+  // sin borrarlo y volver a subirlo
+  if(!String(placa.descripcion || '').trim()){
+    estado('Falta la descripción: es lo que va debajo de la publicación.', true);
+    const campo = $('#descripcion');
+    campo.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    campo.focus();
+    return;
+  }
+  const laminas = (placa.laminas || []).length + 1;
+  if(!confirm(`Se va a publicar en Instagram un carrusel de ${laminas} imagen${laminas > 1 ? 'es' : ''}. ¿Seguimos?`)) return;
+  ev.target.disabled = true;
+  // publicar puede llevar minutos; si la pantalla se apaga, se corta todo
+  const despierto = await mantenerDespierto();
+  try{
+    if(placa.formato === 'reel' && !fuenteDelReel()){
+      estado('Falta el video del reel.', true);
+      ev.target.disabled = false;
+      return;
+    }
+    let items;
+    if(placa.formato === 'reel'){
+      items = [await reelParaPublicar()];
+    }else{
+      trabajo('Generando las imágenes', 0);
+      items = await itemsParaPublicar((a) => trabajo('Generando las imágenes', a));
+    }
+
+    trabajo('Publicando en Instagram', null,
+      'Instagram tiene que recibir y procesar cada pieza. Con video puede tardar unos minutos. No cierres esta ventana.');
+    const res = await fetch('api/publicar.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clave: clave(), items,
+        caption: armarCaption(),
+        colaboradores: placa.colaboradores || '',
+        etiquetados: placa.etiquetados || '',
+      }),
+    });
+    const datos = await res.json().catch(() => ({}));
+    if(!res.ok){
+      if(res.status === 401) localStorage.removeItem('clave_publicar');
+      throw new Error(datos.error || `Error ${res.status}`);
+    }
+    estado('Publicado' + (datos.aviso ? ' — ' + datos.aviso : ''));
+    if(datos.enlace) window.open(datos.enlace, '_blank');
+  }catch(e){ estado(e.message, true); }
+  finally{ cerrarTrabajo(); despierto?.release().catch(() => {}); }
+  ev.target.disabled = false;
+});
+
+/* ------------------------------------------------------------------ */
+/* programar para más tarde                                            */
+/* ------------------------------------------------------------------ */
+
+/* Al programar, las imágenes se generan ahora y quedan subidas: cuando
+   llegue la hora no va a haber ningún navegador que las dibuje. */
+async function cargaParaProgramar(){
+  if(placa.formato === 'reel') return { items: [await reelParaPublicar()] };
+  trabajo('Generando las imágenes', 0);
+  const listos = await itemsParaPublicar((a) => trabajo('Generando las imágenes', a));
+  const items = [];
+  for(const item of listos){
+    trabajo('Guardando las imágenes', items.length / listos.length,
+      'Quedan subidas desde ahora: a la hora de publicar no va a haber ningún navegador que las dibuje.');
+    if(item.tipo !== 'imagen'){ items.push(item); continue; }
+    const blob = await (await fetch(item.dataUrl)).blob();
+    const { ruta } = await guardarFoto(new File([blob], 'programada.jpg', { type: 'image/jpeg' }));
+    items.push({ tipo: 'imagen', ruta });
+  }
+  return { items };
+}
+
+async function pintarCola(){
+  const cola = $('#cola');
+  if(!cola) return;
+  try{
+    const { programadas, ahora, ahora_bd: bd } = await api('api/programar.php');
+    // si los relojes del servidor no coinciden, lo programado sale a
+    // destiempo y hay que saberlo antes de que pase
+    const desfase = bd ? Math.abs(new Date(ahora) - new Date(bd.replace(' ', 'T') + 'Z')) : 0;
+    const aviso = desfase > 120000
+      ? `<li class="error">Ojo: el reloj de la base va ${Math.round(desfase / 60000)} min
+         corrido respecto del servidor. Avisale a quien programó esto.</li>`
+      : '';
+    cola.innerHTML = aviso + ((programadas || []).map((p) => `
+      <li class="${esc(p.estado)}">
+        <b>${esc(new Date(p.publicar_en).toLocaleString('es-CL',
+              { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }))}</b>
+        <span>${esc(p.nombre)} · ${esc(p.estado)}</span>
+        ${p.estado === 'pendiente'
+          ? `<button class="descarga quitar" data-quitar-cola="${p.id}">Cancelar</button>` : ''}
+      </li>`).join('') || '<li class="pendiente">Nada programado.</li>');
+  }catch(e){ cola.innerHTML = `<li class="error">${esc(e.message)}</li>`; }
+}
+
+$('#programar').addEventListener('click', async (ev) => {
+  const cuando = $('#cuando').value;
+  if(!cuando) return estado('Elegí la fecha y la hora.', true);
+  if(!String(placa.descripcion || '').trim()){
+    return estado('Falta la descripción: es lo que va debajo de la publicación.', true);
+  }
+  ev.target.disabled = true;
+  const despierto = await mantenerDespierto();
+  try{
+    const carga = await cargaParaProgramar();
+    trabajo('Anotando en la cola', null);
+    await api('api/programar.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clave: clave(), placa_id: placa.id, nombre: placa.nombre,
+        // se manda el instante absoluto: el servidor puede estar en otra zona
+        publicar_en: new Date(cuando).toISOString(),
+        carga: { ...carga, caption: armarCaption(),
+                 colaboradores: placa.colaboradores || '',
+                 etiquetados: placa.etiquetados || '' },
+      }),
+    });
+    estado('Programado');
+    await pintarCola();
+  }catch(e){ estado(e.message, true); }
+  finally{ cerrarTrabajo(); despierto?.release().catch(() => {}); }
+  ev.target.disabled = false;
+});
+
+$('#cola').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('[data-quitar-cola]');
+  if(!b) return;
+  try{
+    await api('api/programar.php?id=' + b.dataset.quitarCola, { method: 'DELETE' });
+    await pintarCola();
+  }catch(e){ estado(e.message, true); }
+});
+
+$('#copiar').addEventListener('click', async () => {
+  const texto = armarCaption();
+  try{
+    await navigator.clipboard.writeText(texto);
+    estado('Descripción copiada' + (placa.colaboradores ? ' — los colaboradores se agregan en Instagram' : ''));
+  }catch(e){ estado('No se pudo copiar: ' + e.message, true); }
+});
+
+$('#bajar_carrusel').addEventListener('click', async (ev) => {
+  ev.target.disabled = true;
+  trabajo('Generando las imágenes', null);
+  try{
+    const n = await exportarCarrusel();
+    estado(`Listas ${n} imagen${n > 1 ? 'es' : ''} en JPEG 1080`);
+  }catch(e){ estado(e.message, true); }
+  finally{ cerrarTrabajo(); }
+  ev.target.disabled = false;
+});
+
+/* El reel terminado, para tenerlo en el teléfono o subirlo a mano. Si ya se
+   grabó para publicar y no cambió nada, se baja el mismo y es instantáneo. */
+$('#bajar_reel').addEventListener('click', async (ev) => {
+  ev.target.disabled = true;
+  const despierto = await mantenerDespierto();
+  try{
+    if(!placa.reel_crudo && placa.video){
+      // los de antes ya están hechos: se bajan del servidor y listo
+      const r = await fetch(placa.video);
+      bajar(await r.blob(), baseNombre() + '.mp4');
+    }else{
+      const { blob } = await grabarReel();
+      bajar(blob, baseNombre() + '.mp4');
+    }
+    estado('Video listo, se descargó');
+  }catch(e){ estado(e.message, true); }
+  finally{ cerrarTrabajo(); despierto?.release().catch(() => {}); }
+  ev.target.disabled = false;
+});
+
+/* Una foto nueva parte entera y centrada: así no se corta aunque venga con
+   otra resolución. */
+async function reemplazarFoto(campo, archivo){
+  trabajo('Subiendo la foto', null, archivo.name);
+  try{
+    const { ruta } = await guardarFoto(archivo);
+    placa[campo + '_ajuste'] = 'completa';
+    placa[campo + '_x'] = 50;
+    placa[campo + '_y'] = 50;
+    cambio(campo, ruta);
+    await pintarFotos();
+  }finally{ cerrarTrabajo(); }
+}
+
+async function reemplazarLamina(i, archivo){
+  if(esVideo(archivo)) return agregarVideo(archivo, i);   // ese trae su propio aviso
+  trabajo('Subiendo la foto', null, archivo.name);
+  try{
+    const { ruta } = await guardarFoto(archivo);
+    placa.laminas[i] = { foto: ruta, ajuste: 'completa', x: 50, y: 50 };
+    cambio('laminas', placa.laminas);
+    await pintarLaminas();
+    estado('Foto del carrusel actualizada');
+  }finally{ cerrarTrabajo(); }
+}
+
+document.addEventListener('change', async (ev) => {
+  const el = ev.target;
+  const archivo = el.files && el.files[0];
+  if(!archivo) return;
+
+  try{
+    if(el.dataset.reelVideo !== undefined){
+      await agregarReel(archivo);
+    }else if(el.dataset.laminaFoto !== undefined){
+      await reemplazarLamina(Number(el.dataset.laminaFoto), archivo);
+      estado('Foto del carrusel actualizada');
+    }else if(el.dataset.foto){
+      estado('Guardando ' + archivo.name + '…');
+      await reemplazarFoto(el.dataset.foto, archivo);
+      estado('Foto actualizada');
+    }
+  }catch(e){ estado(e.message, true); }
+  el.value = '';
+});
+
+/* ------------------------------------------------------------------ */
+/* video: quemar el degradado y el logo encima                          */
+/* ------------------------------------------------------------------ */
+
+const TIPO_MP4 = 'video/mp4;codecs=avc1.42E01E,mp4a.40.2';
+const DURACION_MAX = 60;   // lo que acepta Instagram en un carrusel
+
+/* Safari nombra el códec distinto según la versión, y con el nombre largo
+   contesta que no puede. Se prueban de más preciso a más general; todos son
+   MP4 con H.264, que es lo único que Instagram acepta. */
+function tipoDeSalida(){
+  const opciones = [TIPO_MP4, 'video/mp4;codecs=avc1,mp4a', 'video/mp4;codecs=avc1', 'video/mp4'];
+  return opciones.find((t) => MediaRecorder.isTypeSupported(t)) || null;
+}
+
+/* El teléfono apaga la pantalla solo y con eso frena el video, los temporizadores
+   y la grabación: la publicación quedaba colgada sin terminar nunca. */
+async function mantenerDespierto(){
+  try{ return await navigator.wakeLock.request('screen'); }
+  catch(e){ return null; }   // no todos los navegadores lo tienen
+}
+
+/* En el teléfono la grabación cuesta bastante más: menos bits por segundo
+   evita que se atore, y la diferencia no se nota en un video de Instagram. */
+const tasaDeVideo = () => (innerWidth < 900 ? 5_000_000 : 8_000_000);
+
+/* Reproduce hasta el final, pero no espera para siempre. Si el video deja de
+   avanzar —pestaña dormida, memoria, un archivo cortado— corta con un motivo
+   en vez de dejar el botón girando. */
+function reproducirHastaElFinal(video){
+  return new Promise((listo, falla) => {
+    let posicion = -1, quieto = 0;
+    const reloj = setInterval(() => {
+      if(cortaron()){ cerrar(); video.pause(); return falla(new Error('Cancelado')); }
+      if(video.currentTime !== posicion){ posicion = video.currentTime; quieto = 0; return; }
+      quieto += 0.5;
+      if(quieto >= 24){
+        cerrar();
+        falla(new Error('El video dejó de avanzar. Suele pasar si la pantalla se apaga '
+          + 'o si se cambia de aplicación mientras se procesa: dejá esta pantalla a la vista.'));
+      }
+    }, 500);
+    const cerrar = () => { clearInterval(reloj); video.onended = null; video.onerror = null; };
+    video.onended = () => { cerrar(); listo(); };
+    video.onerror = () => { cerrar(); falla(new Error('El video se cortó a mitad de camino')); };
+    video.play().catch((e) => {
+      cerrar();
+      falla(new Error('El navegador no dejó reproducir el video: ' + e.message));
+    });
+  });
+}
+
+/* Se reproduce el video, se dibuja cada cuadro dentro de la moldura junto
+   con el logo, y se graba la salida. La grabación es en tiempo real: un
+   video de 30 segundos tarda 30 segundos. No hay forma de acelerarlo con
+   MediaRecorder, y a cambio el resultado sale en MP4/H.264, que es el
+   único formato que Instagram acepta. */
+async function quemarVideo(archivo, lamina, avisar){
+  const tipo = tipoDeSalida();
+  if(!tipo){
+    throw new Error('Este navegador no puede generar MP4, que es lo único que acepta '
+      + 'Instagram. Probá con Chrome, o con Safari actualizado.');
+  }
+
+  const video = document.createElement('video');
+  video.src = URL.createObjectURL(archivo);
+  video.muted = false;
+  video.playsInline = true;
+  await new Promise((listo, falla) => {
+    video.onloadedmetadata = listo;
+    video.onerror = () => falla(new Error('No se pudo leer el video'));
+  });
+  if(video.duration > DURACION_MAX + 0.5){
+    throw new Error(`El video dura ${Math.round(video.duration)}s y el máximo son ${DURACION_MAX}s`);
+  }
+
+  const lienzo = document.createElement('canvas');
+  lienzo.width = lienzo.height = 1080;
+  const ctx = lienzo.getContext('2d');
+  const logo = await cargarImagen(LOGO);
+
+  const flujo = lienzo.captureStream(30);
+
+  // el audio del video se engancha aparte; sin esto la salida sale muda
+  let audio = null;
+  try{
+    audio = new AudioContext();
+    // iOS lo entrega dormido: sin esto la salida queda muda
+    if(audio.state === 'suspended') await audio.resume();
+    const fuente = audio.createMediaElementSource(video);
+    const destino = audio.createMediaStreamDestination();
+    fuente.connect(destino);
+    destino.stream.getAudioTracks().forEach((t) => flujo.addTrack(t));
+  }catch(e){ /* si el video no trae audio, sigue sin él */ }
+
+  const grabador = new MediaRecorder(flujo, {
+    mimeType: tipo, videoBitsPerSecond: tasaDeVideo(),
+  });
+  const trozos = [];
+  grabador.ondataavailable = (e) => { if(e.data.size) trozos.push(e.data); };
+  let falloGrabador = null;
+  grabador.onerror = (e) => { falloGrabador = e.error || new Error('falló la grabación'); };
+
+  let dibujando = true;
+  const pintar = () => {
+    if(!dibujando) return;
+    dibujarLamina(ctx, placa, lamina, video, logo, 1080);
+    if(video.duration) avisar?.(video.currentTime / video.duration);
+    setTimeout(pintar, 33);   // ~30 cuadros por segundo
+  };
+
+  // igual que en el reel: sin un cuadro listo, lo primero que se graba es
+  // el lienzo vacío y eso termina siendo la portada
+  video.currentTime = 0;
+  await new Promise((r) => {
+    if(video.readyState >= 2) return r();
+    video.onloadeddata = r;
+    setTimeout(r, 1500);
+  });
+  dibujarLamina(ctx, placa, lamina, video, logo, 1080);
+
+  const listo = new Promise((r) => { grabador.onstop = r; });
+  const despierto = await mantenerDespierto();
+  try{
+    grabador.start();
+    pintar();
+    await reproducirHastaElFinal(video);
+  }finally{
+    dibujando = false;
+    if(grabador.state !== 'inactive') grabador.stop();
+    despierto?.release().catch(() => {});
+  }
+  await listo;
+  audio?.close();
+  if(falloGrabador) throw falloGrabador;
+  if(!trozos.length) throw new Error('La grabación salió vacía. Probá con un video más corto.');
+
+  // una imagen del primer cuadro, para la vista previa y las miniaturas
+  video.currentTime = 0;
+  await new Promise((r) => { video.onseeked = r; setTimeout(r, 500); });
+  dibujarLamina(ctx, placa, lamina, video, logo, 1080);
+  const portada = await new Promise((r) => lienzo.toBlob(r, 'image/jpeg', 0.9));
+
+  URL.revokeObjectURL(video.src);
+  return { video: new Blob(trozos, { type: 'video/mp4' }), portada };
+}
+
+const ANIMACION = 1.2;   // segundos que tarda en entrar el titular
+
+/* Igual que quemarVideo pero vertical y con el titular animado. La
+   animación ocupa el primer segundo y pico; después queda fijo. */
+async function quemarReel(fuente, avisar){
+  const tipo = tipoDeSalida();
+  if(!tipo){
+    throw new Error('Este navegador no puede generar MP4, que es lo único que acepta '
+      + 'Instagram. Probá con Chrome, o con Safari actualizado.');
+  }
+  const video = document.createElement('video');
+  // sirve tanto un archivo recién elegido como uno ya guardado en el servidor
+  const propia = typeof fuente !== 'string';
+  video.src = propia ? URL.createObjectURL(fuente) : fuente;
+  video.playsInline = true;
+  await new Promise((listo, falla) => {
+    video.onloadedmetadata = listo;
+    video.onerror = () => falla(new Error('No se pudo leer el video'));
+  });
+  if(video.duration > 90.5) throw new Error(`El reel dura ${Math.round(video.duration)}s y el máximo son 90s`);
+
+  const lienzo = document.createElement('canvas');
+  lienzo.width = REEL.ancho;
+  lienzo.height = REEL.alto;
+  const ctx = lienzo.getContext('2d');
+  const logo = await cargarImagen(LOGO);
+
+  const flujo = lienzo.captureStream(30);
+  let audio = null;
+  try{
+    audio = new AudioContext();
+    // iOS lo entrega dormido: sin esto la salida queda muda
+    if(audio.state === 'suspended') await audio.resume();
+    const fuente = audio.createMediaElementSource(video);
+    const destino = audio.createMediaStreamDestination();
+    fuente.connect(destino);
+    destino.stream.getAudioTracks().forEach((t) => flujo.addTrack(t));
+  }catch(e){ /* si no trae audio, sigue sin él */ }
+
+  const grabador = new MediaRecorder(flujo, { mimeType: tipo, videoBitsPerSecond: tasaDeVideo() });
+  const trozos = [];
+  grabador.ondataavailable = (e) => { if(e.data.size) trozos.push(e.data); };
+  let falloGrabador = null;
+  grabador.onerror = (e) => { falloGrabador = e.error || new Error('falló la grabación'); };
+
+  let dibujando = true;
+  const pintar = () => {
+    if(!dibujando) return;
+    dibujarReel(ctx, placa, video, logo, REEL.ancho, REEL.alto,
+      Math.min(1, video.currentTime / ANIMACION));
+    if(video.duration) avisar?.(video.currentTime / video.duration);
+    setTimeout(pintar, 33);
+  };
+
+  /* El primer cuadro decide la portada del reel en el perfil. Si se empieza
+     a grabar antes de que el video tenga un cuadro listo, lo primero que
+     entra es el lienzo vacío: negro con el degradado abajo, que es lo que
+     salía en la grilla. Así que se espera a tener imagen y se dibuja antes
+     de arrancar la grabadora. */
+  video.currentTime = 0;
+  await new Promise((r) => {
+    if(video.readyState >= 2) return r();
+    video.onloadeddata = r;
+    setTimeout(r, 1500);
+  });
+  dibujarReel(ctx, placa, video, logo, REEL.ancho, REEL.alto, 0);
+
+  const listo = new Promise((r) => { grabador.onstop = r; });
+  const despierto = await mantenerDespierto();
+  try{
+    grabador.start();
+    pintar();
+    await reproducirHastaElFinal(video);
+  }finally{
+    dibujando = false;
+    if(grabador.state !== 'inactive') grabador.stop();
+    despierto?.release().catch(() => {});
+  }
+  await listo;
+  audio?.close();
+  if(falloGrabador) throw falloGrabador;
+  if(!trozos.length) throw new Error('La grabación salió vacía. Probá con un video más corto.');
+
+  // portada: un cuadro con el titular ya entrado
+  video.currentTime = Math.min(2, video.duration / 2);
+  await new Promise((r) => { video.onseeked = r; setTimeout(r, 600); });
+  dibujarReel(ctx, placa, video, logo, REEL.ancho, REEL.alto, 1);
+  const portada = await new Promise((r) => lienzo.toBlob(r, 'image/jpeg', 0.9));
+
+  if(propia) URL.revokeObjectURL(video.src);
+  return { video: new Blob(trozos, { type: 'video/mp4' }), portada };
+}
+
+/* El video se guarda tal cual llega. Antes se le quemaba el titular acá
+   mismo, y entonces cambiar el texto no servía de nada: el video ya estaba
+   hecho. Ahora se quema recién al publicar.
+   El archivo elegido se ve al instante desde el propio teléfono y viaja al
+   servidor de fondo: no hay razón para mirar una barra sin poder escribir. */
+let videoLocal = null;      // el archivo de esta sesión, ya en el navegador
+let subiendoVideo = null;   // termina cuando el crudo llegó al servidor
+
+const fuenteDelReel = () => videoLocal || placa.video || '';
+
+async function agregarReel(archivo){
+  if(videoLocal) URL.revokeObjectURL(videoLocal);
+  videoLocal = URL.createObjectURL(archivo);
+  ultimoQuemado = null;
+  placa.reel_crudo = 1;
+  placa.portada = '';
+  repintar();
+  await pintarFotos();
+
+  // el aviso va en la tarjeta del video, que es donde se está mirando
+  const decir = (texto, mal) => {
+    const el = $('#estado_video');
+    if(el){ el.textContent = texto; el.classList.toggle('mal', !!mal); }
+    estado(texto, mal);
+  };
+  decir('Guardando el video… 0%. Podés ir escribiendo el titular.');
+
+  // si mientras sube se cambia de placa, lo subido es de la otra: no se toca
+  const suPlaca = placa;
+  subiendoVideo = guardarFoto(archivo, (a) => {
+    decir(`Guardando el video… ${Math.round(a * 100)}%. Podés ir escribiendo el titular.`);
+  })
+    .then(({ ruta }) => {
+      if(placa !== suPlaca) return ruta;
+      cambio('video', ruta);
+      decir('Video guardado.');
+      return ruta;
+    })
+    .catch((e) => {
+      if(placa === suPlaca){
+        decir('No se guardó: ' + e.message, true);
+        aviso('El video no llegó al servidor',
+          e.message + ' Se ve acá porque está en este teléfono, pero si cerrás la '
+          + 'página se pierde. Probá de nuevo, o con un video más corto.');
+      }
+      throw e;
+    });
+}
+
+/* Grabar es en tiempo real: no hay forma de hacerlo más rápido. Lo que sí se
+   puede es no hacerlo dos veces. Se guarda el resultado junto con la firma de
+   lo que se ve en pantalla; mientras no cambie nada, se reusa. */
+let ultimoQuemado = null;
+
+const firmaDelReel = () => JSON.stringify([
+  fuenteDelReel(), placa.titulo, placa.etiqueta, placa.color_fondo, placa.color_filete,
+]);
+
+async function grabarReel(){
+  const fuente = fuenteDelReel();
+  if(!fuente) throw new Error('Falta el video del reel');
+  const firma = firmaDelReel();
+  if(ultimoQuemado && ultimoQuemado.firma === firma) return ultimoQuemado;
+
+  const espera = 'Se le queman encima el titular, la etiqueta y el logo. '
+    + 'Tarda lo que dura el video: la grabación es en tiempo real.';
+  trabajo('Grabando el titular en el video', 0, espera);
+  // se graba desde el archivo del propio teléfono cuando está: no hay que
+  // bajarlo del servidor para volver a subirlo
+  const { video } = await quemarReel(fuente, (a) => {
+    trabajo('Grabando el titular en el video', a, espera);
+  });
+  // primero termina de subir el crudo: dos videos grandes a la vez por la red
+  // del teléfono se pisan y ninguno avanza
+  await subiendoVideo?.catch(() => {});
+  trabajo('Subiendo el reel', 0, 'Ya está grabado: falta que llegue al servidor.');
+  const sub = await guardarFoto(new File([video], 'reel.mp4', { type: 'video/mp4' }),
+    (a) => trabajo('Subiendo el reel', a, 'Ya está grabado: falta que llegue al servidor.'));
+  ultimoQuemado = { firma, ruta: sub.ruta, blob: video };
+  return ultimoQuemado;
+}
+
+/* Lo que se manda a Instagram: acá sí se quema, con el texto que tenga la
+   placa en este momento. Las de antes ya vienen quemadas del servidor. */
+async function reelParaPublicar(){
+  if(!fuenteDelReel()) throw new Error('Falta el video del reel');
+  if(!placa.reel_crudo) return { tipo: 'reel', ruta: placa.video };
+  const { ruta } = await grabarReel();
+  return { tipo: 'reel', ruta };
+}
+
+async function agregarVideo(archivo, indice){
+  const lamina = { ajuste: 'cubrir', x: 50, y: 50 };
+  const espera = 'Se le queman encima el degradado y el logo. Tarda lo que dura el video.';
+  trabajo('Procesando el video', 0, espera);
+  try{
+    const { video, portada } = await quemarVideo(archivo, lamina, (avance) => {
+      trabajo('Procesando el video', avance, espera);
+    });
+
+    trabajo('Subiendo el video', 0, 'Ya está listo: falta que llegue al servidor.');
+    const subido = await guardarFoto(new File([video], 'lamina.mp4', { type: 'video/mp4' }),
+      (a) => trabajo('Subiendo el video', a, 'Ya está listo: falta que llegue al servidor.'));
+    const conPortada = await guardarFoto(new File([portada], 'portada.jpg', { type: 'image/jpeg' }));
+
+    const nueva = { ...lamina, tipo: 'video', video: subido.ruta, foto: conPortada.ruta };
+    if(indice === undefined) placa.laminas = (placa.laminas || []).concat(nueva);
+    else placa.laminas[indice] = nueva;
+    cambio('laminas', placa.laminas);
+    await pintarLaminas();
+    estado('Video listo en el carrusel');
+  }finally{ cerrarTrabajo(); }
+}
+
+/* ------------------------------------------------------------------ */
+/* arrastrar y soltar fotos                                            */
+/* ------------------------------------------------------------------ */
+
+const esVideo = (f) => f.type.startsWith('video/');
+const mediosDe_ = (dt) => [...(dt?.files || [])]
+  .filter((f) => f.type.startsWith('image/') || esVideo(f));
+
+/* Dónde se puede soltar: cada hueco de foto, cada lámina, y la sección
+   del carrusel entera (ahí se sueltan varias de una vez). */
+function zonaDeSoltado(destino){
+  return destino.closest('.foto[data-campo]')
+      || destino.closest('[data-lamina]')
+      || destino.closest('#zona_carrusel');
+}
+
+let zonaActual = null;
+const marcar = (zona) => {
+  if(zonaActual === zona) return;
+  zonaActual?.classList.remove('soltar');
+  zonaActual = zona;
+  zonaActual?.classList.add('soltar');
+};
+
+// sin esto el navegador abre la imagen y se pierde lo que estabas haciendo
+document.addEventListener('dragover', (ev) => {
+  if(!ev.dataTransfer?.types.includes('Files')) return;
+  ev.preventDefault();
+  marcar(zonaDeSoltado(ev.target));
+});
+document.addEventListener('dragleave', (ev) => {
+  if(ev.relatedTarget === null) marcar(null);
+});
+document.addEventListener('drop', async (ev) => {
+  if(!ev.dataTransfer?.types.includes('Files')) return;
+  ev.preventDefault();
+  const zona = zonaDeSoltado(ev.target);
+  marcar(null);
+  const archivos = mediosDe_(ev.dataTransfer);
+  if(!zona || !archivos.length || !placa) return;
+
+  try{
+    if(zona.dataset.campo){
+      await reemplazarFoto(zona.dataset.campo, archivos[0]);
+      estado('Foto actualizada');
+    }else if(zona.dataset.lamina !== undefined){
+      await reemplazarLamina(Number(zona.dataset.lamina), archivos[0]);
+    }else{
+      // en la zona del carrusel se agregan todas las que entren
+      const lugar = MAX_LAMINAS - (placa.laminas || []).length;
+      const entran = archivos.slice(0, lugar);
+      if(!entran.length) return estado(`El carrusel ya está lleno: ${MAX_LAMINAS + 1} imágenes más el cierre`, true);
+      for(const [i, archivo] of entran.entries()){
+        // el video abre su propio aviso, con su porcentaje
+        if(esVideo(archivo)){ await agregarVideo(archivo); continue; }
+        trabajo(`Subiendo ${entran.length > 1 ? `${i + 1} de ${entran.length}` : 'la foto'}`,
+          i / entran.length, archivo.name);
+        const { ruta } = await guardarFoto(archivo);
+        placa.laminas = (placa.laminas || []).concat({ foto: ruta, ajuste: 'completa', x: 50, y: 50 });
+      }
+      cambio('laminas', placa.laminas);
+      await pintarLaminas();
+      estado(`${entran.length} foto${entran.length > 1 ? 's' : ''} al carrusel` +
+             (archivos.length > entran.length ? ` (${archivos.length - entran.length} no entraron)` : ''));
+    }
+  }catch(e){ estado(e.message, true); }
+  finally{ cerrarTrabajo(); }
+});
+
+$('#selector').addEventListener('change', (ev) => cargar(Number(ev.target.value)));
+$('#nueva').addEventListener('click', abrirPortada);
+$('#duplicar').addEventListener('click', async () => cargar(await crear(placa)));
+
+$('#borrar').addEventListener('click', async () => {
+  if(!confirm('¿Borrar «' + placa.nombre + '»?')) return;
+  const lista = await listarPlacas();
+  if(lista.length <= 1) return estado('Tiene que quedar al menos una placa', true);
+  await borrarPlacaBd(placa.id);
+  const resto = await listarPlacas();
+  cargar(resto[resto.length - 1].id);
+});
+
+document.querySelectorAll('[data-exportar]').forEach((boton) => {
+  boton.addEventListener('click', async () => {
+    trabajo('Generando el PNG', null);
+    boton.disabled = true;
+    try{
+      await exportarPng(Number(boton.dataset.lado));
+      estado('Listo, se descargó el PNG');
+    }catch(e){ estado(e.message, true); }
+    finally{ cerrarTrabajo(); }
+    boton.disabled = false;
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* portada                                                             */
+/* ------------------------------------------------------------------ */
+
+async function ultimaPlaca(){
+  const lista = await listarPlacas();
+  const guardada = Number(localStorage.getItem('placa'));
+  return lista.find((p) => p.id === guardada) || lista[0] || null;
+}
+
+/* Si el editor no puede arrancar, hay que decirlo en la cara y no dejar
+   un lienzo negro: el mensaje del panel queda al fondo y no se ve. */
+function pantallaError(mensaje){
+  const portada = $('#portada');
+  portada.innerHTML = `
+    <h2>El editor no puede arrancar</h2>
+    <p class="fallo">${esc(mensaje)}</p>
+    <p class="pista">
+      Casi siempre falta crear <code>api/config.php</code> en el servidor,
+      copiando <code>api/config.ejemplo.php</code> y completando los datos
+      de la base MySQL y la clave.
+    </p>
+    <div class="fila">
+      <button class="tarjeta-chica" id="reintentar">Reintentar</button>
+      <a class="tarjeta-chica" href="panel-a7f3c9e21b.html">Abrir el panel de configuración</a>
+    </div>`;
+  portada.hidden = false;
+  $('#reintentar').addEventListener('click', () => location.reload());
+}
+
+/* Pantalla para escribir la clave. Al aceptar se recarga: así todo el
+   arranque vuelve a correr con la clave puesta, sin estados a medias. */
+function pantallaClave(mensaje){
+  const portada = $('#portada');
+  portada.innerHTML = `
+    <h2>Clave de acceso</h2>
+    ${mensaje ? `<p class="fallo">${esc(mensaje)}</p>` : ''}
+    <p class="pista">
+      Es la que está en <code>api/config.php</code>, en la línea
+      <code>PUBLICAR_CLAVE</code>. Queda guardada en este navegador y no se
+      vuelve a pedir.
+    </p>
+    <div class="fila">
+      <input type="password" id="clave_entrada" placeholder="Clave" autocomplete="current-password">
+      <button class="tarjeta-chica" id="entrar">Entrar</button>
+    </div>`;
+  portada.hidden = false;
+
+  const entrar = () => {
+    const v = $('#clave_entrada').value.trim();
+    if(!v) return;
+    localStorage.setItem('clave_publicar', v);
+    location.reload();
+  };
+  $('#entrar').addEventListener('click', entrar);
+  $('#clave_entrada').addEventListener('keydown', (e) => { if(e.key === 'Enter') entrar(); });
+  $('#clave_entrada').focus();
+}
+
+async function abrirPortada(){
+  const ultima = await ultimaPlaca();
+  const seguir = $('#seguir');
+  seguir.hidden = !ultima;
+  if(ultima){
+    seguir.textContent = 'Seguir con la última: ' + ultima.nombre;
+    seguir.dataset.id = ultima.id;
+  }
+  $('#portada').hidden = false;
+}
+
+$('#portada').addEventListener('click', async (ev) => {
+  const boton = ev.target.closest('[data-crear], #seguir');
+  if(!boton) return;
+  if(boton.id === 'seguir') return cargar(Number(boton.dataset.id));
+  const plantillas = { urgente: URGENTE, reel: REELS, noticia: BASE };
+  cargar(await crear(plantillas[boton.dataset.crear] || BASE));
+});
+
+/* ------------------------------------------------------------------ */
+/* arranque                                                            */
+/* ------------------------------------------------------------------ */
+
+(async () => {
+  document.title = 'Editor de placas — ' + MARCA.nombre;
+  $('#cual').textContent = MARCA.nombre;
+  // este medio usa una sola foto de fondo: el selector de armados sobra
+  if(MARCA.disenos === false) $('#disenos').closest('fieldset').hidden = true;
+  // los formatos que este medio todavía no tiene dibujados, no se ofrecen
+  if(Array.isArray(MARCA.formatos)){
+    document.querySelectorAll('[data-crear]').forEach((b) => {
+      b.hidden = !MARCA.formatos.includes(b.dataset.crear);
+    });
+  }
+
+  await esperarTipografias();
+  pintarDisenos();
+  pintarPaleta();
+  pintarChips();
+  if(!clave()) return pantallaClave();
+  // por si el hosting no tiene cron: al abrir, se publica lo que ya venció
+  api('api/programar.php?tarea=vaciar&clave=' + encodeURIComponent(clave()))
+    .catch(() => {});
+  try{
+    if(!(await listarPlacas()).length) await crear(EJEMPLO);
+    abrirPortada();
+  }catch(e){
+    if(!e.esClave) pantallaError(e.message);
+  }
+})();

@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Editor de placas — Somos Puerto</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter+Tight:wght@500;900&family=Poppins:ital,wght@0,700;0,900;1,800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#15161a; --panel:#1e2026; --linea:#2e3138; --texto:#e7e9ee;
+    --suave:#9aa0ad; --acento:#ff6100;
+  }
+  *{ box-sizing:border-box; margin:0 }
+  body{
+    background:var(--bg); color:var(--texto); font:14px/1.5 system-ui, sans-serif;
+    display:grid; grid-template-columns:minmax(340px, 430px) 1fr; height:100svh;
+  }
+  @media (max-width:900px){ body{ grid-template-columns:1fr; height:auto } }
+
+  /* ---------- panel de controles ---------- */
+  .panel{ overflow-y:auto; border-right:1px solid var(--linea); background:var(--panel) }
+  .panel > header{
+    position:sticky; top:0; z-index:2; background:var(--panel);
+    border-bottom:1px solid var(--linea); padding:14px 18px;
+  }
+  h1{ font-size:15px; letter-spacing:.02em; flex:1; min-width:0 }
+  h1 small{
+    color:var(--suave); font-weight:400; display:block; font-size:12px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .panel > header button{ padding:6px 10px; font-size:12px; flex:none }
+
+  fieldset{ border:0; border-bottom:1px solid var(--linea); padding:16px 18px }
+  legend{
+    font-size:11px; text-transform:uppercase; letter-spacing:.09em;
+    color:var(--suave); padding:0; margin-bottom:12px;
+  }
+  label{ display:block; font-size:12px; color:var(--suave); margin-bottom:5px }
+  .campo{ margin-bottom:14px }
+  .campo:last-child{ margin-bottom:0 }
+
+  input[type=text], input[type=number], textarea, select{
+    width:100%; background:#14151a; color:var(--texto); font:inherit;
+    border:1px solid var(--linea); border-radius:7px; padding:8px 10px;
+  }
+  input:focus, textarea:focus, select:focus{ outline:2px solid var(--acento); outline-offset:-1px }
+  textarea{ resize:vertical; min-height:120px; line-height:1.45 }
+  input[type=range]{ width:100%; accent-color:var(--acento) }
+  input[type=color]{
+    width:44px; height:34px; padding:2px; background:#14151a;
+    border:1px solid var(--linea); border-radius:7px; flex:none;
+  }
+
+  .fila{ display:flex; gap:10px; align-items:center }
+  .fila > *{ min-width:0 }
+  .mitades{ display:grid; grid-template-columns:1fr 1fr; gap:10px }
+
+  button{
+    font:inherit; color:var(--texto); background:#282b33; cursor:pointer;
+    border:1px solid var(--linea); border-radius:7px; padding:8px 12px;
+  }
+  button:hover{ background:#33373f }
+  button.principal{ background:var(--acento); border-color:var(--acento); color:#fff; font-weight:600 }
+  button.principal:hover{ filter:brightness(1.1) }
+
+  /* diseños de foto */
+  .disenos{ display:grid; grid-template-columns:repeat(2,1fr); gap:8px }
+  .disenos button{ display:grid; gap:6px; justify-items:center; padding:10px 6px; font-size:11px; line-height:1.25; text-align:center }
+  .disenos button.activo{ border-color:var(--acento); background:#2c2019 }
+  .disenos svg{ width:44px; height:30px }
+
+  /* paleta */
+  .paleta{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px }
+  .muestra{ display:grid; gap:6px; justify-items:center; padding:8px 4px; font-size:11px }
+  .muestra .par{ display:flex; width:100%; height:22px; border-radius:6px; overflow:hidden }
+  .muestra .par i{ flex:1 }
+  .muestra .par i:last-child{ flex:0 0 28% }
+  .muestra.activa{ border-color:var(--acento); background:#2c2019 }
+  .muestra.original span::after{ content:" ★" }
+
+  /* etiquetas rápidas */
+  .chips{ display:flex; flex-wrap:wrap; gap:6px }
+  .chips button{ padding:5px 10px; font-size:12px; border-radius:20px }
+  .chips button.activo{ border-color:var(--acento); background:#2c2019 }
+
+  /* ajuste de foto */
+  .ajuste{ display:flex; gap:6px; margin-top:8px }
+  .ajuste button{ flex:1; font-size:11px; padding:4px 6px }
+  .ajuste button.activo{ border-color:var(--acento); background:#2c2019 }
+
+  .foto{ display:flex; gap:12px; align-items:flex-start; margin-bottom:16px }
+  .foto:last-child{ margin-bottom:0 }
+  .foto img, .foto video{
+    width:72px; height:72px; object-fit:cover; border-radius:8px;
+    background:#000; border:1px solid var(--linea); flex:none;
+  }
+  .foto .cuerpo{ flex:1; min-width:0 }
+  .foto .cuerpo b{ display:block; font-size:12px; margin-bottom:6px; font-weight:600 }
+  .foto .cuerpo b.sub{ margin-top:10px; color:var(--suave); font-weight:500 }
+  .foto .encuadre{ display:grid; grid-template-columns:auto 1fr; gap:4px 8px; align-items:center; margin-top:8px }
+  .foto .encuadre span{ font-size:11px; color:var(--suave) }
+  input[type=file]{ display:none }
+
+  /* arrastrar y soltar */
+  .foto, [data-lamina], #zona_carrusel{
+    border-radius:10px; transition:outline-color .12s, background .12s;
+    outline:2px dashed transparent; outline-offset:4px;
+  }
+  .soltar{ outline-color:var(--acento); background:#2c201933 }
+  #zona_carrusel{ padding:2px }
+  .archivo{ font-size:12px; padding:5px 10px }
+
+  /* el formato urgente no tiene fotos ni degradado */
+  body[data-formato="urgente"] [data-solo="noticia"]{ display:none }
+  body[data-formato="reel"] [data-sin-reel]{ display:none }
+
+  .nota{ font-size:11px; color:var(--suave); margin-top:8px; line-height:1.45 }
+  /* el avance de la subida del video, donde se lo está mirando */
+  #estado_video{ color:var(--texto) }
+  #estado_video:empty{ display:none }
+  #estado_video.mal{ color:#ff8a7a }
+  #estado{ font-size:11px; color:var(--suave); min-height:16px; padding:0 18px 16px }
+  #estado.error{ color:#ff8a7a }
+
+  /* ---------- trabajando: lo que tarda se ve en grande ---------- */
+  /* Quemar un video tarda lo que dura el video. Con el aviso chiquito abajo
+     del panel parecía que el editor se había colgado. */
+  .trabajando{
+    position:fixed; inset:0; z-index:50; display:grid; place-items:center;
+    background:#0b0b0dcc; backdrop-filter:blur(3px);
+    padding:24px; text-align:center;
+  }
+  .trabajando[hidden]{ display:none }
+  .trabajando__caja{
+    width:min(100%, 460px); display:grid; gap:14px; justify-items:center;
+    background:#16181d; border:1px solid var(--linea); border-radius:18px;
+    padding:34px 30px; box-shadow:0 24px 70px #000a;
+  }
+  .trabajando__que{ font-size:19px; font-weight:600; line-height:1.35 }
+  .trabajando__pct{
+    font-size:56px; font-weight:800; letter-spacing:-.02em; line-height:1;
+    font-variant-numeric:tabular-nums;
+  }
+  .trabajando__pct[hidden]{ display:none }
+  .trabajando__riel{
+    width:100%; height:10px; border-radius:99px; overflow:hidden;
+    background:#2a2d34;
+  }
+  .trabajando__riel i{
+    display:block; height:100%; width:0; border-radius:99px;
+    background:linear-gradient(90deg, #f9c449, #e0399a, #7a4ff0);
+    transition:width .25s ease;
+  }
+  /* sin porcentaje que mostrar, la barra va y viene para que se note que
+     algo sigue pasando */
+  /* 38% de ancho: el recorrido va de -100% (justo afuera por la izquierda)
+     a 263%, que es lo que mide el riel en unidades de la propia barra */
+  .trabajando__riel i.sinmedida{
+    width:38%; animation:vaiven 1.3s ease-in-out infinite; transition:none;
+  }
+  @keyframes vaiven{
+    0%{ transform:translateX(-100%) } 100%{ transform:translateX(263%) }
+  }
+  .trabajando__pista{ font-size:13px; color:var(--suave); line-height:1.5 }
+  .trabajando__pista:empty{ display:none }
+  /* nunca dejar la pantalla trabada sin salida */
+  .trabajando__cortar{
+    background:none; border:0; color:var(--suave); font-size:13px;
+    text-decoration:underline; padding:4px 8px;
+  }
+  .trabajando__cortar:hover{ background:none; color:var(--texto) }
+
+  /* ---------- portada: qué vas a publicar ---------- */
+  .portada{
+    position:fixed; inset:0; z-index:50; background:#0f1013;
+    display:grid; align-content:center; justify-items:center; gap:28px;
+    padding:32px; overflow-y:auto;   /* si no entra, que se pueda scrollear */
+  }
+  .portada[hidden]{ display:none }
+  .portada h2{ font-size:22px; font-weight:600; letter-spacing:.01em }
+  .portada__opciones{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:22px }
+  @media (max-width:820px){ .portada__opciones{ grid-template-columns:1fr }
+    .tarjeta{ width:min(70vw, 280px) } }
+
+  /* Las medidas del texto van en cqw, o sea en proporción al ancho de la
+     propia tarjeta: así nunca se sale, mida lo que mida la pantalla. */
+  .tarjeta{
+    container-type:inline-size;
+    display:grid; gap:2px; align-content:center; justify-items:center;
+    width:min(27vw, 280px); aspect-ratio:1; padding:7%; border:0; border-radius:20px;
+    color:#fff; text-align:center; cursor:pointer; transition:transform .12s, box-shadow .12s;
+  }
+  .tarjeta:hover{ transform:translateY(-4px); box-shadow:0 18px 40px #0009 }
+  .tarjeta b{ font-size:8cqw; font-weight:700; letter-spacing:.12em; text-transform:uppercase; opacity:.9 }
+  .tarjeta span{ font-size:19cqw; font-weight:900; line-height:1; letter-spacing:-.02em; text-transform:uppercase }
+  .tarjeta em{ font-style:normal; font-size:5.2cqw; line-height:1.3; opacity:.75; margin-top:6%; text-wrap:balance }
+  .tarjeta--urgente{ background:linear-gradient(180deg,#ff3d7f 0%,#ff0054 45%,#4a0019 100%) }
+  .tarjeta--noticia{ background:linear-gradient(180deg,#3df0c1 0%,#0ae7ae 45%,#04503b 100%) }
+  .tarjeta--reel{ background:linear-gradient(180deg,#8b6cf5 0%,#6228d7 45%,#1d0a4a 100%) }
+
+  /* pantalla de arranque fallido */
+  .portada .fallo{
+    background:#2a1418; border-left:3px solid var(--acento); border-radius:0 8px 8px 0;
+    padding:12px 16px; font-family:ui-monospace, monospace; font-size:13px;
+    max-width:52ch; line-height:1.5;
+  }
+  .portada .pista{ color:var(--suave); font-size:13.5px; max-width:52ch; line-height:1.6 }
+  .portada input{
+    background:#14151a; color:var(--texto); font:inherit; min-width:230px;
+    border:1px solid var(--linea); border-radius:8px; padding:10px 12px;
+  }
+  .portada input:focus{ outline:2px solid var(--acento); outline-offset:-1px }
+  .portada .pista code{
+    background:#14151a; border:1px solid var(--linea); border-radius:5px;
+    padding:1px 5px; font-size:12.5px;
+  }
+  .tarjeta-chica{
+    display:inline-block; padding:9px 14px; border-radius:8px; font:inherit; font-size:14px;
+    background:#282b33; border:1px solid var(--linea); color:var(--texto);
+    text-decoration:none; cursor:pointer;
+  }
+  .tarjeta-chica:hover{ background:#33373f }
+
+  .portada__seguir{ background:none; border:0; color:var(--suave); font-size:13px; text-decoration:underline }
+  .portada__seguir:hover{ background:none; color:var(--texto) }
+  .portada__seguir[hidden]{ display:none }
+
+  /* ---------- vista previa ---------- */
+  .previa{
+    display:grid; align-content:center; justify-items:center; gap:14px;
+    padding:24px; overflow:auto; min-height:0;
+  }
+  /* se descuenta lo que ocupan la tira, el botón y su pie: si no, la tira
+     quedaba empujada fuera de la ventana en pantallas bajas */
+  /* Se limita por los dos lados y no por el ancho: el lienzo cambia de forma
+     según el formato (1:1 la placa, 9:16 el reel) y con una sola medida el
+     reel se salía de la ventana. */
+  #previa{
+    width:auto; height:auto; max-width:100%; max-height:calc(100svh - 300px);
+    border-radius:10px; background:#000; position:relative; z-index:1;
+  }
+  /* El marco toma el tamaño del lienzo y el video se estira por debajo: en el
+     reel el lienzo es transparente y solo lleva el texto, que así se puede
+     redibujar mientras se escribe sin tocar el video. */
+  .marco{ position:relative; display:grid; min-width:0;
+          border-radius:10px; box-shadow:0 12px 40px #0008 }
+  #previa_video{
+    position:absolute; inset:0; width:100%; height:100%;
+    object-fit:cover; border-radius:10px; background:#000; z-index:0;
+  }
+  body[data-formato="reel"] #previa{ background:transparent }
+  #previa[hidden], #previa_video[hidden]{ display:none }
+
+  /* La tira muestra el post completo, en el orden en que va a salir. */
+  .carrusel-vista{
+    display:grid; gap:8px; justify-items:center; max-width:100%;
+    background:#1c1e24; border:1px solid var(--linea); border-radius:12px;
+    padding:12px 14px;
+  }
+  .carrusel-vista p{
+    font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--suave);
+  }
+  .tira{ display:flex; gap:10px; overflow-x:auto; max-width:100%; padding:2px }
+  .tira button{
+    position:relative; flex:none; padding:0; border-radius:9px; overflow:hidden;
+    line-height:0; border:2px solid #3a3e47; background:none; cursor:pointer;
+  }
+  .tira button:hover{ border-color:#5a5f6b }
+  .tira button.activa{ border-color:var(--acento); box-shadow:0 0 0 3px #ff610033 }
+  .tira canvas{ width:80px; height:80px; display:block }
+  .tira i{
+    position:absolute; left:0; top:0; font-style:normal; font-size:10px;
+    font-weight:700; color:#fff; background:#000a; padding:2px 5px; border-radius:0 0 6px 0;
+  }
+  /* La acción que publica no se puede confundir con las que descargan:
+     lleva el degradado de Instagram, flecha hacia arriba y es la única
+     de su tipo en toda la interfaz. */
+  .publicar{
+    display:inline-flex; align-items:center; gap:10px;
+    padding:13px 26px; border:0; border-radius:10px; cursor:pointer;
+    font:inherit; font-size:15px; font-weight:700; color:#fff;
+    background:linear-gradient(95deg,#f9ce34 0%,#ee2a7b 45%,#6228d7 100%);
+    box-shadow:0 6px 20px #ee2a7b40;
+  }
+  .publicar:hover{ filter:brightness(1.08) }
+  .publicar:disabled{ filter:grayscale(.7); cursor:default }
+  .publicar svg{ width:19px; height:19px; flex:none }
+  .pie-previa{ font-size:12px; color:var(--suave); margin-top:-6px }
+  .programar{ font-size:13px; color:var(--suave); max-width:min(100%, 420px); width:100% }
+  .programar summary{ cursor:pointer; text-align:center }
+  .programar input{
+    flex:1; min-width:0; background:#14151a; color:var(--texto); font:inherit; font-size:13px;
+    border:1px solid var(--linea); border-radius:8px; padding:8px 10px;
+  }
+  .programar ul{ list-style:none; display:grid; gap:6px; margin-top:12px }
+  .programar li{ display:flex; gap:8px; align-items:center; font-size:12px }
+  .programar li b{ font-weight:600; color:var(--texto) }
+  .programar li .quitar{ margin-left:auto; padding:3px 8px; font-size:11px }
+  .programar .pendiente{ color:var(--suave) }
+  .programar .publicada{ color:#0ae7ae }
+  .programar .error{ color:#ff8a7a }
+
+  /* Las descargas son de contorno y con flecha hacia abajo: se leen de un
+     vistazo como lo contrario de publicar. */
+  .descarga{
+    display:inline-flex; align-items:center; gap:7px;
+    background:transparent; border:1px solid var(--linea); color:var(--suave);
+    font-size:13px; padding:8px 12px;
+  }
+  .descarga:hover{ background:#22242a; color:var(--texto) }
+  .descarga svg{ width:15px; height:15px; flex:none }
+
+  /* solo tienen sentido en el teléfono, donde la vista previa compite por la
+     pantalla con el teclado */
+  .encoger, .mostrar_vista{ display:none }
+
+  /* En el celular la vista previa se queda arriba fija y los controles
+     scrollean debajo, para no editar a ciegas. */
+  @media (max-width:900px){
+    body{ height:auto; min-height:100svh }
+    .previa{
+      order:-1; position:sticky; top:0; z-index:5;
+      background:var(--bg); border-bottom:1px solid var(--linea);
+      padding:10px 10px calc(10px + env(safe-area-inset-bottom));
+    }
+    /* La franja de arriba compite con la barra del navegador y con el
+       teclado. Todo lo que hay acá está medido para que el formulario
+       empiece dentro de la pantalla, no debajo. */
+    .previa{ gap:8px }
+    #previa, #previa_video{ max-height:22svh }
+    /* el reel es angosto: con la misma altura se veía diminuto */
+    body[data-formato="reel"] #previa,
+    body[data-formato="reel"] #previa_video{ max-height:30svh }
+
+    /* en el reel la tira no muestra nada: es un video solo */
+    body[data-formato="reel"] .carrusel-vista{ display:none }
+
+    /* la tira, en una línea: el rótulo largo se comía dos renglones */
+    .carrusel-vista{ padding:6px 9px; gap:4px; width:100% }
+    .carrusel-vista p{
+      font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+      max-width:100%; justify-self:start;
+    }
+    .tira{ gap:7px }
+    .publicar{ padding:12px 18px; font-size:15px }
+    .pie-previa{ margin-top:-4px }
+
+    /* Escribiendo, la vista previa se hace chica y se va todo lo que no sea
+       mirar el titular. Con el teclado abierto y la vista entera no quedaba
+       lugar para el campo que se estaba editando: no se podía escribir. */
+    /* flotando en una esquina: puesto en la columna se comía 38 px de alto
+       que hacen falta para el formulario */
+    .encoger{
+      position:absolute; top:8px; right:8px; z-index:6;
+      display:inline-flex; align-items:center;
+      background:#1c1e24cc; border:1px solid var(--linea); color:var(--suave);
+      font-size:11px; padding:0 9px; border-radius:99px; min-height:26px;
+    }
+    body.escribiendo .previa{ padding:6px 10px }
+    body.escribiendo #previa, body.escribiendo #previa_video{ max-height:13svh }
+    body.escribiendo[data-formato="reel"] #previa,
+    body.escribiendo[data-formato="reel"] #previa_video{ max-height:16svh }
+    body.escribiendo .carrusel-vista,
+    body.escribiendo .publicar,
+    body.escribiendo .pie-previa,
+    body.escribiendo .programar,
+    body.escribiendo #estado{ display:none }
+
+    /* y si además la esconde a mano, no queda nada arriba */
+    body.sin_vista .previa{ display:none }
+    body.sin_vista .mostrar_vista{ display:inline-flex }
+    .panel{ border-right:0; overflow:visible; padding-bottom:env(safe-area-inset-bottom) }
+    .panel > header{ top:0 }
+
+    /* iOS hace zoom solo al tocar un campo cuya letra mide menos de 16px,
+       y después la página queda corrida. Con 16px no lo hace. */
+    input[type=text], input[type=number], input[type=password],
+    textarea, select{ font-size:16px }
+
+    /* objetivos de toque cómodos y sin el resaltado gris al tocar */
+    button{ min-height:40px }
+    .chips button{ min-height:34px }
+    *{ -webkit-tap-highlight-color:transparent }
+    .tira canvas{ width:52px; height:52px }
+  }
+</style>
+</head>
+<body>
+
+<div class="portada" id="portada" hidden>
+  <h2>¿Qué vas a publicar?</h2>
+  <div class="portada__opciones">
+    <button class="tarjeta tarjeta--urgente" data-crear="urgente">
+      <b>Urgente</b>
+      <span>Ahora</span>
+      <em>Placa roja, sin fotos, una palabra enorme</em>
+    </button>
+    <button class="tarjeta tarjeta--noticia" data-crear="noticia">
+      <b>Noticia</b>
+      <span>Normal</span>
+      <em>Collage de fotos, etiqueta y titular</em>
+    </button>
+    <button class="tarjeta tarjeta--reel" data-crear="reel">
+      <b>Reel</b>
+      <span>Video</span>
+      <em>Vertical, con el titular animado al entrar</em>
+    </button>
+  </div>
+  <button class="portada__seguir" id="seguir"></button>
+</div>
+
+
+<div class="panel">
+  <header>
+    <div class="fila">
+      <h1>Editor de placas <small id="cual">Somos Puerto</small></h1>
+      <button id="nueva" title="Crear una placa nueva">Nueva</button>
+      <button id="duplicar" title="Duplicar la placa actual">Duplicar</button>
+      <button class="mostrar_vista" id="mostrar_vista" type="button">Ver la placa</button>
+    </div>
+  </header>
+
+  <fieldset>
+    <legend id="leg_titular">Titular</legend>
+    <div class="campo">
+      <label for="titulo" id="lab_titulo">Un salto de línea = una línea en la placa</label>
+      <textarea id="titulo" data-campo="titulo" spellcheck="false"></textarea>
+    </div>
+    <div class="campo" data-solo="noticia">
+      <label for="tam_titulo">Tamaño de letra</label>
+      <input type="number" id="tam_titulo" data-campo="tam_titulo" step="1" min="40" max="300">
+    </div>
+    <p class="nota" data-solo="noticia">
+      Para resaltar algo, ponelo entre asteriscos: <code>*así*</code>. Queda
+      con un recuadro del color opuesto de la paleta.
+    </p>
+    <p class="nota" data-solo="noticia">Medida del lienzo original de 3000 px. El original usa 143. La interlínea se ajusta sola.</p>
+  </fieldset>
+  <fieldset data-solo="noticia" data-sin-reel>
+    <legend>Diseño de la foto</legend>
+    <div class="disenos" id="disenos"></div>
+  </fieldset>
+
+  <fieldset data-solo="noticia">
+    <legend>Fotos</legend>
+    <div id="fotos"></div>
+    <p class="nota">
+      Arrastrá una foto sobre el recuadro para cambiarla, o usá el botón.
+      Ojo: las de fábrica traen el círculo blanco incrustado; al reemplazarlas
+      eso desaparece.
+    </p>
+  </fieldset>
+
+  <fieldset data-solo="noticia">
+    <legend id="leg_etiqueta">Etiqueta</legend>
+    <div class="campo">
+      <input type="text" id="etiqueta" data-campo="etiqueta" placeholder="Farándula, noticia, contingencia…">
+    </div>
+    <div class="campo chips" id="chips_etiqueta"></div>
+    <p class="nota">Cinta blanca, la etiqueta oficial del medio. Dejala vacía y desaparece de la placa.</p>
+  </fieldset>
+
+
+  <fieldset data-solo="noticia">
+    <legend>Color</legend>
+    <div class="campo">
+      <label>Paletas del medio · la estrella es la oficial</label>
+      <div class="paleta" id="paleta"></div>
+    </div>
+    <p class="nota">
+      Cada paleta trae su fondo y su filete, que es también el color del
+      resaltado. El degradado sigue al fondo, así que se acomoda solo.
+    </p>
+  </fieldset>
+
+
+  <fieldset data-sin-reel>
+    <legend>Carrusel</legend>
+    <div id="zona_carrusel">
+      <div id="laminas"></div>
+    <div class="campo fila" style="margin-top:12px">
+      <button id="agregar_lamina">Agregar foto</button>
+      <span class="nota" style="margin:0"><b id="cuantas">1</b> de 10 en el carrusel</span>
+    </div>
+      <p class="nota">
+        Arrastrá fotos o videos acá para agregarlos de a varios. Cada uno sale
+        con la misma moldura y el logo, para que el carrusel se vea parejo.
+        El video se procesa al subirlo y tarda lo que dura: máximo 60 segundos,
+        y sale en MP4, que es lo que pide Instagram.
+      </p>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Texto para Instagram</legend>
+    <div class="campo">
+      <label for="descripcion">Descripción <b style="color:var(--acento)">·  obligatoria</b></label>
+      <textarea id="descripcion" data-campo="descripcion" style="min-height:90px"
+                placeholder="El texto que va debajo de la publicación"></textarea>
+    </div>
+    <div class="campo">
+      <label for="hashtags">Hashtags</label>
+      <input type="text" id="hashtags" data-campo="hashtags" placeholder="#valparaiso #farandula">
+    </div>
+    <div class="campo">
+      <label for="etiquetados">Etiquetar personas</label>
+      <input type="text" id="etiquetados" data-campo="etiquetados" placeholder="@cuenta1, @cuenta2">
+    </div>
+    <div class="campo">
+      <label for="colaboradores">Colaboradores</label>
+      <input type="text" id="colaboradores" data-campo="colaboradores" placeholder="@cuenta1, @cuenta2">
+    </div>
+    <button id="copiar">Copiar descripción + hashtags</button>
+    <p class="nota">
+      Los colaboradores se agregan en Instagram al publicar, en "Etiquetar personas →
+      Invitar colaborador". Acá quedan anotados para no olvidarlos.
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Exportar</legend>
+    <div class="campo fila">
+      <button class="descarga" data-exportar="png" data-lado="1080"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><path d="m6 10 6 6 6-6"/><path d="M4 20h16"/></svg>PNG 1080</button>
+      <button class="descarga" data-exportar="png" data-lado="3000"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><path d="m6 10 6 6 6-6"/><path d="M4 20h16"/></svg>PNG 3000</button>
+    </div>
+    <div class="campo fila" style="margin-top:10px">
+      <button class="descarga" id="bajar_carrusel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><path d="m6 10 6 6 6-6"/><path d="M4 20h16"/></svg>Bajar imágenes</button>
+      <button class="descarga" id="bajar_reel" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><path d="m6 10 6 6 6-6"/><path d="M4 20h16"/></svg>Bajar el video</button>
+      <button class="descarga" id="compartir" hidden>Compartir al teléfono</button>
+    </div>
+    <p class="nota">
+      Salidas manuales, por si querés subirlas vos: el carrusel sale en JPEG
+      1080 y los PNG son para archivo. Para publicar directo está el botón de
+      colores al lado de la vista previa.
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Placas guardadas</legend>
+    <div class="campo fila">
+      <select id="selector"></select>
+      <button id="borrar" title="Borrar la placa actual">✕</button>
+    </div>
+    <p class="nota">
+      Al abrir el editor vuelve sola la última que estuviste editando.
+      Las placas se guardan en la base, así que son las mismas desde
+      cualquier dispositivo.
+    </p>
+  </fieldset>
+
+  <p id="estado"></p>
+</div>
+
+<div class="trabajando" id="trabajando" hidden role="status" aria-live="polite">
+  <div class="trabajando__caja">
+    <p class="trabajando__que" id="trabajando_que"></p>
+    <p class="trabajando__pct" id="trabajando_pct" hidden></p>
+    <div class="trabajando__riel"><i id="trabajando_barra"></i></div>
+    <p class="trabajando__pista" id="trabajando_pista"></p>
+    <button class="trabajando__cortar" id="cortar_trabajo" type="button">Cancelar</button>
+  </div>
+</div>
+
+<div class="previa">
+  <div class="marco">
+    <!-- el video crudo abajo y el texto dibujado encima, que es lo que
+         permite escribir y ver el titular cambiar sin volver a procesar.
+         Va en silencio: es la única forma de que el navegador lo deje
+         arrancar solo, y el sonido del reel publicado no se toca. -->
+    <video id="previa_video" playsinline loop autoplay muted
+           aria-label="Vista previa del reel" hidden></video>
+    <canvas id="previa" width="1080" height="1080" aria-label="Vista previa"></canvas>
+  </div>
+  <button class="encoger" id="encoger" type="button">Ocultar la vista</button>
+  <div class="carrusel-vista">
+    <p id="rotulo_tira"></p>
+    <div class="tira" id="tira"></div>
+  </div>
+  <button class="publicar" id="publicar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg><span>Publicar en Instagram</span></button>
+  <p class="pie-previa">Publica de verdad, en la cuenta real.</p>
+  <details class="programar">
+    <summary>o programarlo para más tarde</summary>
+    <div class="fila" style="margin-top:12px">
+      <input type="datetime-local" id="cuando">
+      <button class="descarga" id="programar">Programar</button>
+    </div>
+    <ul id="cola"></ul>
+  </details>
+</div>
+
+<script type="module" src="editor.js"></script>
+</body>
+</html>

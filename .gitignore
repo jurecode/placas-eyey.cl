@@ -1,0 +1,6 @@
+api/config.php
+fotos/*
+!fotos/.gitkeep
+publicaciones/*
+!publicaciones/.gitkeep
+.DS_Store
