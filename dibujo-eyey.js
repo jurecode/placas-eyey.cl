@@ -40,7 +40,9 @@ export const MEDIDAS = {
   titular:  { fuente: 260, interlinea: 1.04, abajo: 175 },
 
   // el resaltado: caja de color con otra negra corrida por detrás
-  marca:    { padX: 40, padY: 26, sombraX: -34, sombraY: -34 },
+  // el resaltado: caja de color con otra negra corrida por detrás.
+  // «aire» es lo que se separa del texto vecino, aparte del relleno propio
+  marca:    { padX: 54, padY: 30, aire: 46, sombraX: -34, sombraY: -34 },
 
   // la huincha de abajo, de lado a lado
   huincha:  { alto: 168, fuente: 82, margen: 300, flechas: 88 },
@@ -74,10 +76,19 @@ function dibujarLinea(ctx, palabras, x, baseline, caja, px, inter, colores){
   const anchos = [];
   let cursor = x;
   for(let i = 0; i < palabras.length; i++){
-    if(i > 0 && palabras[i - 1].marcado !== palabras[i].marcado) cursor += caja.padX;
+    if(i > 0){
+      // una palabra «pegada» viene del mismo original, partida por el
+      // asterisco: va sin espacio o quedaría un hueco en medio
+      if(!palabras[i].pegada) cursor += espacio;
+      // el aire separa el recuadro de la palabra vecina, salvo cuando el
+      // asterisco partió una palabra: ahí abrirla sería peor
+      if(palabras[i - 1].marcado !== palabras[i].marcado && !palabras[i].pegada){
+        cursor += caja.aire;
+      }
+    }
     posiciones.push(cursor);
     anchos.push(ancho(palabras[i]));
-    cursor += anchos[i] + espacio;
+    cursor += anchos[i];
   }
 
   // los recuadros: primero el negro corrido, después el de color encima
@@ -208,7 +219,7 @@ export function dibujar(ctx, datos, fotos, lado, marca = {}){
   const M = MEDIDAS.marca;
   const caja = {
     mayuscula: met.mayuscula,
-    padX: M.padX * u, padY: M.padY * u,
+    padX: M.padX * u, padY: M.padY * u, aire: M.aire * u,
     sombraX: M.sombraX * u, sombraY: M.sombraY * u,
   };
   const colores = {

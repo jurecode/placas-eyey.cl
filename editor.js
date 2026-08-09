@@ -23,8 +23,12 @@ const dibujarCierre = (ctx, datos, arte, lado, logo) =>
   (DIBUJANTE.dibujarCierre || somosPuerto.dibujarCierre)(ctx, datos, arte, lado, MARCA, logo);
 /* Si el archivo está, manda el archivo; si no, cargarImagen devuelve nada y
    el dibujante arma la lámina solo. Así se puede cambiar el cierre subiendo
-   un PNG a marca/, sin publicar una versión. */
-const arteDelCierre = () => (typeof CIERRE === 'string' && CIERRE ? cargarImagen(CIERRE) : null);
+   un PNG a marca/, sin publicar una versión.
+   La ruta por defecto no depende de lo que diga la marca: esa carpeta no se
+   sobrescribe al actualizar, así que una marca vieja nunca se entera de un
+   valor nuevo y el cierre desaparecía sin motivo visible. */
+const arteDelCierre = () =>
+  cargarImagen((typeof CIERRE === 'string' && CIERRE) ? CIERRE : 'marca/cierre.png');
 
 /* ------------------------------------------------------------------ */
 /* catálogos                                                           */
@@ -82,7 +86,7 @@ const MAX_LAMINAS = 8;   // 8 + la placa + el cierre = las 10 que permite Instag
 /* Todo post que no sea un reel termina con la lámina de cierre: el color de
    la paleta y el arte de «síguenos y comparte». Va sola, no se agrega a mano,
    y por eso ocupa uno de los diez lugares de Instagram. */
-const llevaCierre = () => placa.formato !== 'reel' && CIERRE !== false && !!CIERRE;
+const llevaCierre = () => placa.formato !== 'reel' && CIERRE !== false;
 
 const EJEMPLO = {
   ...BASE,

@@ -95,10 +95,18 @@ export function anchoDe(ctx, texto, tipo, px, interletrado){
 export function enPalabras(parrafo){
   const palabras = [];
   let marcado = false;
+  let pegada = false;   // el asterisco cayó dentro de una palabra
   for(const trozo of parrafo.split('*')){
-    for(const p of trozo.split(' ')){
-      if(p !== '') palabras.push({ t: p, marcado });
-    }
+    const partes = trozo.split(' ');
+    partes.forEach((p, i) => {
+      if(p === '') return;
+      // solo el primer pedazo puede venir pegado al anterior, y solo si el
+      // asterisco no estaba en un espacio: si no, «Tit*ular*» salía partido
+      // en dos con un hueco en medio
+      palabras.push({ t: p, marcado, pegada: pegada && i === 0 });
+    });
+    // el trozo siguiente arranca pegado si este no terminó en espacio
+    pegada = trozo !== '' && !trozo.endsWith(' ');
     marcado = !marcado;   // cada asterisco abre o cierra
   }
   return palabras;
