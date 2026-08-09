@@ -10,11 +10,12 @@ export const MARCA = {
   cuenta: '@eyey.cl',
 
   logo:   'marca/logo.png',
-  /* La lámina de cierre la dibuja el propio dibujante con las piezas de la
-     marca, así cambia con la paleta y no hay un archivo que mantener. Si
-     algún día hay arte propio, se deja en marca/cierre.png y se pone acá esa
-     ruta en lugar de true. */
-  cierre: true,
+  /* La lámina de cierre. Si existe el archivo, se usa ese: se pinta el fondo
+     con el color de la paleta y el PNG va encima, así el mismo arte sirve en
+     cualquier color. Si el archivo no está, el dibujante arma una con las
+     piezas de la marca. Para cambiarla no hace falta publicar una versión:
+     alcanza con dejar el PNG en esta carpeta, que el actualizador no toca. */
+  cierre: 'marca/cierre.png',
 
   /* Lo que va en la huincha de abajo, a la izquierda de las flechas. */
   pie: 'SIGUENOS EYEY.CL',

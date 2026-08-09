@@ -21,6 +21,9 @@ const dibujarLamina = (ctx, datos, lamina, foto, logo, lado) =>
    solo se le acerca el arte si lo hay, y el logo por si lo necesita. */
 const dibujarCierre = (ctx, datos, arte, lado, logo) =>
   (DIBUJANTE.dibujarCierre || somosPuerto.dibujarCierre)(ctx, datos, arte, lado, MARCA, logo);
+/* Si el archivo está, manda el archivo; si no, cargarImagen devuelve nada y
+   el dibujante arma la lámina solo. Así se puede cambiar el cierre subiendo
+   un PNG a marca/, sin publicar una versión. */
 const arteDelCierre = () => (typeof CIERRE === 'string' && CIERRE ? cargarImagen(CIERRE) : null);
 
 /* ------------------------------------------------------------------ */
