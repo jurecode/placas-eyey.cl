@@ -64,14 +64,12 @@ function degradadoNegro(ctx, alto){
   return grad;
 }
 
-/* Una línea del titular: las palabras entre asteriscos van sobre la caja de
-   color, con la caja negra corrida por detrás. Igual que en el otro medio,
-   primero se calculan todas las posiciones y recién después se dibuja, para
-   que la caja y el texto no puedan despegarse. */
-function dibujarLinea(ctx, palabras, x, baseline, caja, px, inter, colores){
-  const ancho = (p) => anchoDe(ctx, p.t, TIPOS.titular, px, inter);
+/* Dónde cae cada palabra de una línea. Se calcula aparte del dibujo porque
+   las cajas de todas las líneas van antes que el texto de todas: si cada
+   línea dibujara lo suyo por turno, el recuadro de una tapaba el texto de la
+   de arriba. */
+function medirLinea(ctx, palabras, x, caja, px, inter){
   const espacio = anchoDe(ctx, ' ', TIPOS.titular, px, inter);
-
   const posiciones = [];
   const anchos = [];
   let cursor = x;
@@ -87,11 +85,15 @@ function dibujarLinea(ctx, palabras, x, baseline, caja, px, inter, colores){
       }
     }
     posiciones.push(cursor);
-    anchos.push(ancho(palabras[i]));
+    anchos.push(anchoDe(ctx, palabras[i].t, TIPOS.titular, px, inter));
     cursor += anchos[i];
   }
+  return { posiciones, anchos };
+}
 
-  // los recuadros: primero el negro corrido, después el de color encima
+/* Los recuadros de una línea: el negro corrido y el de color encima. */
+function cajasDeLinea(ctx, palabras, medida, baseline, caja, colores){
+  const { posiciones, anchos } = medida;
   for(let i = 0; i < palabras.length; i++){
     if(!palabras[i].marcado) continue;
     let fin = i;
@@ -99,20 +101,23 @@ function dibujarLinea(ctx, palabras, x, baseline, caja, px, inter, colores){
     const desde = posiciones[i] - caja.padX;
     const hasta = posiciones[fin] + anchos[fin] + caja.padX;
     const arriba = baseline - caja.mayuscula - caja.padY;
-    const altoCaja = caja.mayuscula + caja.padY * 2;
+    const alto = caja.mayuscula + caja.padY * 2;
 
     ctx.fillStyle = '#000000';
-    ctx.fillRect(desde + caja.sombraX, arriba + caja.sombraY, hasta - desde, altoCaja);
+    ctx.fillRect(desde + caja.sombraX, arriba + caja.sombraY, hasta - desde, alto);
     ctx.fillStyle = colores.fondo;
-    ctx.fillRect(desde, arriba, hasta - desde, altoCaja);
+    ctx.fillRect(desde, arriba, hasta - desde, alto);
     i = fin;
   }
+}
 
+/* Y el texto, que va siempre al final para que nada lo tape. */
+function textoDeLinea(ctx, palabras, medida, baseline, px, inter, colores){
   ctx.font = fuente(TIPOS.titular, px);
   ctx.letterSpacing = `${inter}px`;
   for(let i = 0; i < palabras.length; i++){
     ctx.fillStyle = palabras[i].marcado ? colores.texto : colores.normal;
-    ctx.fillText(palabras[i].t, posiciones[i], baseline);
+    ctx.fillText(palabras[i].t, medida.posiciones[i], baseline);
   }
 }
 
@@ -228,11 +233,11 @@ export function dibujar(ctx, datos, fotos, lado, marca = {}){
     texto: textoSobre(datos.color_filete || '#ff0000'),
   };
 
-  lineas.forEach((linea, i) => {
-    dibujarLinea(ctx, linea, izquierda,
-      arriba + i * interlinea + medioInterlineado + met.ascenso,
-      caja, px, 0, colores);
-  });
+  // dos pasadas: todas las cajas y recién después todas las letras
+  const bases = lineas.map((_, i) => arriba + i * interlinea + medioInterlineado + met.ascenso);
+  const medidas = lineas.map((linea) => medirLinea(ctx, linea, izquierda, caja, px, 0));
+  lineas.forEach((linea, i) => cajasDeLinea(ctx, linea, medidas[i], bases[i], caja, colores));
+  lineas.forEach((linea, i) => textoDeLinea(ctx, linea, medidas[i], bases[i], px, 0, colores));
 
   dibujarHuincha(ctx, datos, marca, u, lado);
 }
