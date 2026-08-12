@@ -95,18 +95,10 @@ export function anchoDe(ctx, texto, tipo, px, interletrado){
 export function enPalabras(parrafo){
   const palabras = [];
   let marcado = false;
-  let pegada = false;   // el asterisco cayó dentro de una palabra
   for(const trozo of parrafo.split('*')){
-    const partes = trozo.split(' ');
-    partes.forEach((p, i) => {
-      if(p === '') return;
-      // solo el primer pedazo puede venir pegado al anterior, y solo si el
-      // asterisco no estaba en un espacio: si no, «Tit*ular*» salía partido
-      // en dos con un hueco en medio
-      palabras.push({ t: p, marcado, pegada: pegada && i === 0 });
-    });
-    // el trozo siguiente arranca pegado si este no terminó en espacio
-    pegada = trozo !== '' && !trozo.endsWith(' ');
+    for(const p of trozo.split(' ')){
+      if(p !== '') palabras.push({ t: p, marcado });
+    }
     marcado = !marcado;   // cada asterisco abre o cierra
   }
   return palabras;
@@ -191,10 +183,12 @@ export function dibujarLinea(ctx, palabras, x, baseline, caja, tipo, px, inter, 
    difuminada de la misma foto. "cubrir": llena y recorta. */
 export function dibujarFoto(ctx, medio, x, y, ancho, alto, ajuste, posX, posY, u){
   if(!medio) return;
-  // sirve igual para una imagen que para un <video>, que no expone width
-  // y height sino videoWidth y videoHeight
-  const anchoOrig = medio.videoWidth || medio.width;
-  const altoOrig  = medio.videoHeight || medio.height;
+  /* Sirve para tres cosas distintas que miden su tamaño de tres maneras: una
+     imagen usa width, un <video> usa videoWidth, y un cuadro suelto salido
+     del decodificador usa displayWidth. Sin la tercera, el cuadro se
+     descartaba en silencio y el video salía negro. */
+  const anchoOrig = medio.displayWidth || medio.videoWidth || medio.width;
+  const altoOrig  = medio.displayHeight || medio.videoHeight || medio.height;
   if(!anchoOrig || !altoOrig) return;
 
   ctx.save();

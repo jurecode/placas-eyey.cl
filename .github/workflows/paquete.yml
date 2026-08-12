@@ -1,4 +1,4 @@
-name: Paquete para subir al hosting de eyey
+name: Paquete para subir al hosting
 
 # Cada push a main deja un .zip listo para subir por FTP, y además una
 # Release con la fecha, para poder volver a una versión anterior.
@@ -20,7 +20,7 @@ jobs:
         run: |
           mkdir -p sitio
           # lo que va al hosting: el editor, el panel y los recursos
-          cp index.html index.php editor.js placa.js dibujo-eyey.js robots.txt sitio/
+          cp index.html index.php editor.js placa.js dibujo-eyey.js mp4.js robots.txt sitio/
           cp panel-*.html sitio/
           cp -r assets sitio/
           cp -r marca sitio/
@@ -48,6 +48,9 @@ jobs:
           grep -q "placa.js?v=$V"  sitio/editor.js  || { echo "no se firmó editor.js";  exit 1; }
           grep -q "const VERSION = '$V'" sitio/editor.js || { echo "no se firmó VERSION"; exit 1; }
 
+      # Un paquete por medio, cada uno con su marca ya puesta en marca/. Así
+      # el sitio se instala descomprimiendo y nada más: nadie tiene que mover
+      # carpetas a mano, que es donde se cuelan los errores.
       - name: Comprimir
         run: cd sitio && zip -rq ../placas-eyey.zip .
 
