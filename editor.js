@@ -4,7 +4,7 @@
  * las placas y las fotos se guardan en MySQL a través de api/, así que son
  * las mismas desde cualquier dispositivo. */
 
-import { dibujarReel, dibujarFoto, esperarTipografias, textoSobre, LIENZO, REEL } from './placa.js';
+import { dibujarCierre, dibujarReel, dibujarFoto, esperarTipografias, LIENZO, REEL } from './placa.js';
 import * as somosPuerto from './placa.js';
 import * as eyey from './dibujo-eyey.js';
 import { MARCA } from './marca/marca.js';
@@ -15,36 +15,6 @@ const DIBUJANTE = { 'eyey': eyey }[MARCA.dibujo] || somosPuerto;
 const dibujar = (ctx, datos, fotos, lado) => DIBUJANTE.dibujar(ctx, datos, fotos, lado, MARCA);
 const dibujarLamina = (ctx, datos, lamina, foto, logo, lado) =>
   DIBUJANTE.dibujarLamina(ctx, datos, lamina, foto, logo, lado, MARCA);
-
-/* El cierre puede ser una imagen —marca.cierre con una ruta— o dibujarse con
-   las piezas de la marca —marca.cierre en true—. El dibujante decide; acá
-   solo se le acerca el arte si lo hay, y el logo por si lo necesita. */
-const dibujarCierre = (ctx, datos, arte, lado, logo) =>
-  (DIBUJANTE.dibujarCierre || somosPuerto.dibujarCierre)(ctx, datos, arte, lado, MARCA, logo);
-/* Si el archivo está, manda el archivo; si no, cargarImagen devuelve nada y
-   el dibujante arma la lámina solo. Así se puede cambiar el cierre subiendo
-   un PNG a marca/, sin publicar una versión.
-   La ruta por defecto no depende de lo que diga la marca: esa carpeta no se
-   sobrescribe al actualizar, así que una marca vieja nunca se entera de un
-   valor nuevo y el cierre desaparecía sin motivo visible. */
-/* El arte del cierre viene en dos versiones, clara y oscura, porque una sola
-   no puede leerse sobre toda la paleta: la clara desaparece en el fondo
-   blanco y la oscura en el negro. Se elige por el mismo criterio con que se
-   decide el color del texto sobre un fondo.
-   Se aceptan varios nombres: el propio y el que suele traer el arte cuando lo
-   exporta el diseñador. Gana el primero que exista. */
-async function arteDelCierre(){
-  const claro = textoSobre(placa.color_fondo || '#000000') === '#ffffff';
-  const candidatos = claro
-    ? [(typeof CIERRE === 'string' && CIERRE) || '', 'marca/cierre.png', 'marca/final.png']
-    : ['marca/cierre-oscuro.png', 'marca/final.negro.png', 'marca/cierre.png', 'marca/final.png'];
-  for(const ruta of candidatos){
-    if(!ruta) continue;
-    const img = await cargarImagen(ruta);
-    if(img) return img;
-  }
-  return null;
-}
 
 /* ------------------------------------------------------------------ */
 /* catálogos                                                           */
@@ -102,7 +72,7 @@ const MAX_LAMINAS = 8;   // 8 + la placa + el cierre = las 10 que permite Instag
 /* Todo post que no sea un reel termina con la lámina de cierre: el color de
    la paleta y el arte de «síguenos y comparte». Va sola, no se agrega a mano,
    y por eso ocupa uno de los diez lugares de Instagram. */
-const llevaCierre = () => placa.formato !== 'reel' && CIERRE !== false;
+const llevaCierre = () => placa.formato !== 'reel' && !!CIERRE;
 
 const EJEMPLO = {
   ...BASE,
@@ -327,6 +297,24 @@ function verVista(mostrar){
   document.body.classList.toggle('sin_vista', !mostrar);
   localStorage.setItem('sin_vista', mostrar ? '' : '1');
 }
+/* La calidad es del aparato, no de la placa: quien publica desde el teléfono
+   con datos quiere rápida y desde la oficina quiere alta. */
+function pintarCalidad(){
+  document.querySelectorAll('[data-calidad]').forEach((b) => {
+    b.classList.toggle('activo', b.dataset.calidad === calidadVideo());
+  });
+}
+$('#calidad')?.addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-calidad]');
+  if(!b) return;
+  localStorage.setItem('calidad_video', b.dataset.calidad);
+  pintarCalidad();
+  estado(b.dataset.calidad === 'rapida'
+    ? 'Los videos van a pesar un tercio menos y subir más rápido.'
+    : 'Los videos van a salir con la mejor calidad posible.');
+});
+pintarCalidad();
+
 $('#encoger')?.addEventListener('click', () => verVista(false));
 $('#mostrar_vista')?.addEventListener('click', () => verVista(true));
 if(localStorage.getItem('sin_vista')) verVista(false);
@@ -402,19 +390,7 @@ const recurso = (ruta) => (/^(assets|marca)\//.test(String(ruta)) ? `${ruta}?v=$
 async function cargarImagen(ref){
   if(!ref) return null;
   if(cacheImg.has(ref)) return cacheImg.get(ref);
-  let url = recurso(ref);
-
-  /* Los archivos de marca/ los reemplaza el propio medio subiéndolos por FTP,
-     sin que cambie la versión del sitio. Como el hosting los sirve con un año
-     de caché, el navegador seguía mostrando el anterior aunque el nuevo ya
-     estuviera arriba. Se piden de nuevo una vez por carga; dentro de la misma
-     sesión el que manda es el de memoria, así que no se baja dos veces. */
-  if(String(ref).startsWith('marca/')){
-    try{
-      const r = await fetch(url, { cache: 'reload' });
-      if(r.ok) url = URL.createObjectURL(await r.blob());
-    }catch(e){ /* sin red se sigue con la ruta de siempre */ }
-  }
+  const url = recurso(ref);
   const img = await new Promise((listo) => {
     const i = new Image();
     i.onload = () => listo(i);
@@ -510,7 +486,7 @@ function repintar(){
       if(vista === 0){
         dibujar(ctx, placa, await imagenesDe(placa), lienzo.width);
       }else if(conCierre && vista === ultima){
-        dibujarCierre(ctx, placa, await arteDelCierre(), lienzo.width, await cargarImagen(LOGO));
+        dibujarCierre(ctx, placa, await cargarImagen(CIERRE), lienzo.width);
       }else{
         const lam = laminas[vista - 1];
         dibujarLamina(ctx, placa, lam, await cargarImagen(lam.foto),
@@ -583,7 +559,7 @@ async function pintarTira(){
   }
   if(cierre){
     const ctx = botones[cuantas - 1].querySelector('canvas').getContext('2d');
-    dibujarCierre(ctx, placa, await arteDelCierre(), 160, logo);
+    dibujarCierre(ctx, placa, await cargarImagen(CIERRE), 160);
   }
 }
 
@@ -621,7 +597,7 @@ async function itemsParaPublicar(avisar){
   }
 
   if(cierre){
-    dibujarCierre(ctx, placa, await arteDelCierre(), 1080, logo);
+    dibujarCierre(ctx, placa, await cargarImagen(CIERRE), 1080);
     items.push({ tipo: 'imagen', dataUrl: await aDataUrl(await jpeg()) });
     avisar?.(1);
   }
@@ -644,7 +620,7 @@ async function archivosDelCarrusel(){
     archivos.push(new File([await jpeg()], `${baseNombre()}-${i + 2}.jpg`, { type: 'image/jpeg' }));
   }
   if(llevaCierre()){
-    dibujarCierre(ctx, placa, await arteDelCierre(), 1080, logo);
+    dibujarCierre(ctx, placa, await cargarImagen(CIERRE), 1080);
     archivos.push(new File([await jpeg()], `${baseNombre()}-cierre.jpg`, { type: 'image/jpeg' }));
   }
   return archivos;
@@ -1222,9 +1198,20 @@ async function mantenerDespierto(){
   catch(e){ return null; }   // no todos los navegadores lo tienen
 }
 
-/* En el teléfono la grabación cuesta bastante más: menos bits por segundo
-   evita que se atore, y la diferencia no se nota en un video de Instagram. */
-const tasaDeVideo = () => (innerWidth < 900 ? 5_000_000 : 8_000_000);
+/* Cuántos bits por segundo lleva el video grabado. Manda el tamaño del
+   archivo y, con eso, lo que tarda en subir; no cambia lo que tarda la
+   grabación, que va contra el reloj.
+   Medido sobre cinco segundos: a 3,5 Mbps el archivo queda en el 78% y a
+   2,5 en el 67%. Instagram recomprime todo igual, así que en modo rápido la
+   pérdida casi no se ve y se sube un tercio menos. */
+/* Declaradas como función y no como constante a propósito: se usan más
+   arriba, al pintar el control, y una constante todavía no existiría. */
+function calidadVideo(){ return localStorage.getItem('calidad_video') || 'alta'; }
+function tasaDeVideo(){
+  return calidadVideo() === 'rapida'
+    ? 2_500_000
+    : (innerWidth < 900 ? 5_000_000 : 8_000_000);
+}
 
 /* iOS no reproduce un <video> que no está colgado de la página: se queda en
    el primer cuadro y la grabación no avanza nunca —el porcentaje se clava y
@@ -1530,7 +1517,8 @@ async function grabarReel(){
   if(ultimoQuemado && ultimoQuemado.firma === firma) return ultimoQuemado;
 
   const espera = 'Se le queman encima el titular, la etiqueta y el logo. '
-    + 'Tarda lo que dura el video: la grabación es en tiempo real.';
+    + 'La grabación es en tiempo real, así que tarda lo que dura el video. '
+    + 'Dejá esta pantalla a la vista.';
   trabajo('Grabando el titular en el video', 0, espera);
   // se graba desde el archivo del propio teléfono cuando está: no hay que
   // bajarlo del servidor para volver a subirlo
