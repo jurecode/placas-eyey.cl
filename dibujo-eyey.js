@@ -10,7 +10,7 @@
  */
 
 import {
-  LIENZO, aRgb, metricas, anchoDe, repartir, textoSobre, dibujarFoto, medidaLogo,
+  LIENZO, altoDe, aRgb, metricas, anchoDe, repartir, textoSobre, dibujarFoto, medidaLogo,
 } from './placa.js';
 
 /* La letra del titular y de la etiqueta es Anton, que es Impact libre: mismas
@@ -125,10 +125,10 @@ function textoDeLinea(ctx, palabras, medida, baseline, px, inter, colores){
 
 /* La huincha de abajo: banda del color de la paleta, el «síguenos» a la
    izquierda y las flechas a la derecha. */
-function dibujarHuincha(ctx, datos, marca, u, lado, invertida = false){
+function dibujarHuincha(ctx, datos, marca, u, ancho, altoLienzo, invertida = false){
   const H = MEDIDAS.huincha;
   const alto = H.alto * u;
-  const y = lado - alto;
+  const y = altoLienzo - alto;
   const paleta = datos.color_fondo || '#ff0000';
   // en el cierre el fondo ya es el color de la paleta: si la huincha fuera
   // del mismo color desaparecería, así que ahí va al revés
@@ -136,7 +136,7 @@ function dibujarHuincha(ctx, datos, marca, u, lado, invertida = false){
   const tinta = invertida ? paleta : textoSobre(paleta);
 
   ctx.fillStyle = color;
-  ctx.fillRect(0, y, lado, alto);
+  ctx.fillRect(0, y, ancho, alto);
 
   const px = H.fuente * u;
   const met = metricas(ctx, TIPOS.pie, px);
@@ -153,12 +153,12 @@ function dibujarHuincha(ctx, datos, marca, u, lado, invertida = false){
   const metF = metricas(ctx, TIPOS.flechas, pxF);
   ctx.font = fuente(TIPOS.flechas, pxF);
   const anchoF = ctx.measureText(flechas).width;
-  ctx.fillText(flechas, lado - H.margen * u - anchoF,
+  ctx.fillText(flechas, ancho - H.margen * u - anchoF,
     y + alto / 2 + metF.mayuscula / 2);
 }
 
 /* La etiqueta: rectángulo negro arriba a la derecha. */
-function dibujarEtiqueta(ctx, datos, u, lado){
+function dibujarEtiqueta(ctx, datos, u, anchoLienzo){
   const texto = String(datos.etiqueta || '').trim().toUpperCase();
   if(!texto) return;
 
@@ -167,7 +167,7 @@ function dibujarEtiqueta(ctx, datos, u, lado){
   const met = metricas(ctx, TIPOS.etiqueta, px);
   const alto = met.mayuscula + E.padY * u * 2;
   const ancho = anchoDe(ctx, texto, TIPOS.etiqueta, px, 0) + E.padX * u * 2;
-  const x = lado - E.margenDerecho * u - ancho;
+  const x = anchoLienzo - E.margenDerecho * u - ancho;
   const y = E.arriba * u;
 
   ctx.fillStyle = '#000000';
@@ -184,22 +184,28 @@ function dibujarEtiqueta(ctx, datos, u, lado){
 /* la placa                                                            */
 /* ------------------------------------------------------------------ */
 
-export function dibujar(ctx, datos, fotos, lado, marca = {}){
-  const u = lado / LIENZO;
+/* Se pide el ancho y el alto sale solo: la proporción es 4:5, la del feed, y
+   es parte del diseño. El canvas tiene que venir de ese tamaño.
+   Acá el alto de más no obliga a recolocar nada: la foto va a sangre, el logo
+   y la etiqueta cuelgan del borde de arriba y el titular se apoya sobre la
+   huincha, que sigue pegada al de abajo. */
+export function dibujar(ctx, datos, fotos, ancho, marca = {}){
+  const u = ancho / LIENZO;
+  const alto = altoDe(ancho);
 
-  ctx.clearRect(0, 0, lado, lado);
+  ctx.clearRect(0, 0, ancho, alto);
   ctx.fillStyle = '#0b0b0d';
-  ctx.fillRect(0, 0, lado, lado);
+  ctx.fillRect(0, 0, ancho, alto);
   ctx.letterSpacing = '0px';
   ctx.textBaseline = 'alphabetic';
 
   // la foto llena el cuadro. Las imágenes llegan con las claves cortas
   // —izq, der, cen— y no con el nombre del campo de la placa.
-  dibujarFoto(ctx, fotos.izq, 0, 0, lado, lado,
+  dibujarFoto(ctx, fotos.izq, 0, 0, ancho, alto,
     datos.foto_izq_ajuste || 'cubrir', datos.foto_izq_x ?? 50, datos.foto_izq_y ?? 50, u);
 
-  ctx.fillStyle = degradadoNegro(ctx, lado);
-  ctx.fillRect(0, 0, lado, lado);
+  ctx.fillStyle = degradadoNegro(ctx, alto);
+  ctx.fillRect(0, 0, ancho, alto);
 
   // el logo, arriba a la izquierda
   if(fotos.logo){
@@ -209,12 +215,12 @@ export function dibujar(ctx, datos, fotos, lado, marca = {}){
       fotos.logo.width * escala, fotos.logo.height * escala);
   }
 
-  dibujarEtiqueta(ctx, datos, u, lado);
+  dibujarEtiqueta(ctx, datos, u, ancho);
 
   // el titular, apoyado sobre la huincha
   const izquierda = MEDIDAS.margen * u;
-  const maxAncho = lado - izquierda * 2;
-  const abajo = lado - MEDIDAS.huincha.alto * u - MEDIDAS.titular.abajo * u;
+  const maxAncho = ancho - izquierda * 2;
+  const abajo = alto - MEDIDAS.huincha.alto * u - MEDIDAS.titular.abajo * u;
   // el titular no puede subir más allá de la etiqueta
   const tope = (MEDIDAS.etiqueta.arriba + MEDIDAS.etiqueta.fuente
                 + MEDIDAS.etiqueta.padY * 2 + 90) * u;
@@ -251,29 +257,30 @@ export function dibujar(ctx, datos, fotos, lado, marca = {}){
   lineas.forEach((linea, i) => cajasDeLinea(ctx, linea, medidas[i], bases[i], caja, colores));
   lineas.forEach((linea, i) => textoDeLinea(ctx, linea, medidas[i], bases[i], px, 0, colores));
 
-  dibujarHuincha(ctx, datos, marca, u, lado);
+  dibujarHuincha(ctx, datos, marca, u, ancho, alto);
 }
 
 /* La lámina del carrusel: la foto con el degradado y la huincha, sin texto. */
-export function dibujarLamina(ctx, datos, lamina, foto, logo, lado, marca = {}){
-  const u = lado / LIENZO;
+export function dibujarLamina(ctx, datos, lamina, foto, logo, ancho, marca = {}){
+  const u = ancho / LIENZO;
+  const alto = altoDe(ancho);
 
-  ctx.clearRect(0, 0, lado, lado);
+  ctx.clearRect(0, 0, ancho, alto);
   ctx.fillStyle = '#0b0b0d';
-  ctx.fillRect(0, 0, lado, lado);
+  ctx.fillRect(0, 0, ancho, alto);
   ctx.letterSpacing = '0px';
 
-  dibujarFoto(ctx, foto, 0, 0, lado, lado,
+  dibujarFoto(ctx, foto, 0, 0, ancho, alto,
     lamina.ajuste || 'cubrir', lamina.x ?? 50, lamina.y ?? 50, u);
 
-  ctx.fillStyle = degradadoNegro(ctx, lado);
-  ctx.fillRect(0, 0, lado, lado);
+  ctx.fillStyle = degradadoNegro(ctx, alto);
+  ctx.fillRect(0, 0, ancho, alto);
 
   if(logo){
-    const [ancho, alto] = medidaLogo(logo, u);
-    ctx.drawImage(logo, MEDIDAS.margen * u, MEDIDAS.logo.arriba * u, ancho, alto);
+    const [anchoLogo, altoLogo] = medidaLogo(logo, u);
+    ctx.drawImage(logo, MEDIDAS.margen * u, MEDIDAS.logo.arriba * u, anchoLogo, altoLogo);
   }
-  dibujarHuincha(ctx, datos, marca, u, lado);
+  dibujarHuincha(ctx, datos, marca, u, ancho, alto);
 }
 
 /* ------------------------------------------------------------------ */
@@ -285,42 +292,48 @@ export function dibujarLamina(ctx, datos, lamina, foto, logo, lado, marca = {}){
    huincha— así que cambia solo con la paleta y no hay un archivo que
    mantener aparte. Si algún día llega el arte propio, se pone en marca/ y
    este dibujo se reemplaza sin tocar nada más. */
-export function dibujarCierre(ctx, datos, arte, lado, marca = {}, logo = null){
-  const u = lado / LIENZO;
+export function dibujarCierre(ctx, datos, arte, ancho, marca = {}, logo = null){
+  const u = ancho / LIENZO;
+  const alto = altoDe(ancho);
   const color = datos.color_fondo || '#ff0000';
   const tinta = textoSobre(color);
 
-  ctx.clearRect(0, 0, lado, lado);
+  ctx.clearRect(0, 0, ancho, alto);
   ctx.fillStyle = color;
-  ctx.fillRect(0, 0, lado, lado);
+  ctx.fillRect(0, 0, ancho, alto);
   ctx.letterSpacing = '0px';
   ctx.textBaseline = 'alphabetic';
 
-  // si algún día hay arte propio, manda ese y no se dibuja nada más
+  // si algún día hay arte propio, manda ese y no se dibuja nada más. Entra
+  // entero y centrado: si viniera cuadrado, agrandarlo hasta llenar el 4:5 le
+  // comería los márgenes, y lo que sobra arriba y abajo ya es el color de la
+  // paleta, así que no se ve ninguna franja.
   if(arte){
-    ctx.drawImage(arte, 0, 0, lado, lado);
+    const escala = Math.min(ancho / arte.width, alto / arte.height);
+    const w = arte.width * escala, h = arte.height * escala;
+    ctx.drawImage(arte, (ancho - w) / 2, (alto - h) / 2, w, h);
     return;
   }
 
-  const centro = lado / 2;
+  const centro = ancho / 2;
 
   // el logo, arriba del texto y pintado del color que se lea sobre el fondo
   if(logo){
-    const alto = 420 * u;
-    const escala = alto / logo.height;
-    const ancho = logo.width * escala;
-    const x = centro - ancho / 2;
-    const y = lado * 0.30 - alto / 2;
+    const altoLogo = 420 * u;
+    const escala = altoLogo / logo.height;
+    const anchoLogo = logo.width * escala;
+    const x = centro - anchoLogo / 2;
+    const y = alto * 0.30 - altoLogo / 2;
 
     const tinte = document.createElement('canvas');
-    tinte.width = Math.max(1, Math.round(ancho));
-    tinte.height = Math.max(1, Math.round(alto));
+    tinte.width = Math.max(1, Math.round(anchoLogo));
+    tinte.height = Math.max(1, Math.round(altoLogo));
     const tc = tinte.getContext('2d');
     tc.drawImage(logo, 0, 0, tinte.width, tinte.height);
     tc.globalCompositeOperation = 'source-in';
     tc.fillStyle = tinta;
     tc.fillRect(0, 0, tinte.width, tinte.height);
-    ctx.drawImage(tinte, x, y, ancho, alto);
+    ctx.drawImage(tinte, x, y, anchoLogo, altoLogo);
   }
 
   // «SÍGUENOS Y COMPARTE», con la segunda línea sobre su caja, igual que el
@@ -328,7 +341,7 @@ export function dibujarCierre(ctx, datos, arte, lado, marca = {}, logo = null){
   const px = 330 * u;
   const met = metricas(ctx, TIPOS.titular, px);
   const interlinea = px * 1.02;
-  const base = lado * 0.60;
+  const base = alto * 0.60;
 
   ctx.font = fuente(TIPOS.titular, px);
   ctx.fillStyle = tinta;
@@ -354,5 +367,5 @@ export function dibujarCierre(ctx, datos, arte, lado, marca = {}, logo = null){
   ctx.font = fuente(TIPOS.titular, px);
   ctx.fillText(dos, x2, y2);
 
-  dibujarHuincha(ctx, datos, marca, u, lado, true);
+  dibujarHuincha(ctx, datos, marca, u, ancho, alto, true);
 }
