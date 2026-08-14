@@ -26,7 +26,6 @@ jobs:
           cp panel-*.html sitio/
           cp -r assets sitio/
           cp -r marca sitio/
-          cp -r marcas sitio/
           cp -r api sitio/
           # carpetas que la API necesita poder escribir
           mkdir -p sitio/publicaciones sitio/fotos
@@ -73,21 +72,13 @@ jobs:
       # Un paquete por medio, cada uno con su marca ya puesta en marca/. Así
       # el sitio se instala descomprimiendo y nada más: nadie tiene que mover
       # carpetas a mano, que es donde se cuelan los errores.
-      - name: Comprimir un paquete por medio
-        run: |
-          cd sitio && zip -rq ../placas-somospuerto.zip . && cd ..
-          for medio in $(ls marcas); do
-            rm -rf sitio/marca
-            cp -r marcas/$medio sitio/marca
-            (cd sitio && zip -rq ../placas-$medio.zip .)
-            echo "armado placas-$medio.zip con la marca de $medio"
-          done
-          ls -la placas-*.zip
+      - name: Comprimir
+        run: cd sitio && zip -rq ../placas-eyey.zip .
 
       - uses: actions/upload-artifact@v4
         with:
           name: sitio
-          path: placas-*.zip
+          path: placas-eyey.zip
           retention-days: 90
 
       # El mensaje del commit es la nota de la versión: es lo que el panel
@@ -105,4 +96,4 @@ jobs:
           tag_name: v${{ github.run_number }}
           name: Versión ${{ github.run_number }}
           body_path: notas.md
-          files: placas-*.zip
+          files: placas-eyey.zip
