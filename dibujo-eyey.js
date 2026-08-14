@@ -41,6 +41,10 @@ export const MEDIDAS = {
   // apretado deja las líneas pegadas y los recuadros casi tocándose
   titular:  { fuente: 260, interlinea: 1.32, abajo: 235 },
 
+  // el corte entre las dos fotos, y el círculo que va encima
+  medio:    { filete: 26 },
+  circulo:  { x: 50, y: 44, radio: 520, anillo: 30 },
+
   // el resaltado: caja de color con otra negra corrida por detrás
   // el resaltado: caja de color con otra negra corrida por detrás.
   // «aire» es lo que se separa del texto vecino, aparte del relleno propio
@@ -201,8 +205,40 @@ export function dibujar(ctx, datos, fotos, ancho, marca = {}){
 
   // la foto llena el cuadro. Las imágenes llegan con las claves cortas
   // —izq, der, cen— y no con el nombre del campo de la placa.
-  dibujarFoto(ctx, fotos.izq, 0, 0, ancho, alto,
+  /* Los armados son los mismos que el otro medio: una foto o dos, con o sin
+     el círculo. Acá no hay recuadro con márgenes como allá —la foto va a
+     sangre— así que dos fotos son las dos mitades del cuadro. */
+  const dosFotos = String(datos.diseno || 'unica').startsWith('duo');
+  const hueco = dosFotos ? (ancho - MEDIDAS.medio.filete * u) / 2 : ancho;
+  dibujarFoto(ctx, fotos.izq, 0, 0, hueco, alto,
     datos.foto_izq_ajuste || 'cubrir', datos.foto_izq_x ?? 50, datos.foto_izq_y ?? 50, u);
+  if(dosFotos){
+    dibujarFoto(ctx, fotos.der, hueco + MEDIDAS.medio.filete * u, 0, hueco, alto,
+      datos.foto_der_ajuste || 'cubrir', datos.foto_der_x ?? 50, datos.foto_der_y ?? 50, u);
+  }
+
+  /* El círculo recortado, con su anillo blanco. Va antes del degradado, para
+     que el fundido lo alcance igual que a las fotos y no quede flotando por
+     encima de todo. */
+  if(String(datos.diseno || '').endsWith('-circulo')){
+    const C = MEDIDAS.circulo;
+    const cx = ancho * (datos.circulo_x ?? C.x) / 100;
+    const cy = alto * (datos.circulo_y ?? C.y) / 100;
+    const radio = C.radio * u;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, radio - C.anillo * u, 0, Math.PI * 2);
+    ctx.clip();
+    const lado = (radio - C.anillo * u) * 2;
+    dibujarFoto(ctx, fotos.cen, cx - lado / 2, cy - lado / 2, lado, lado,
+      datos.foto_cen_ajuste || 'cubrir', datos.foto_cen_x ?? 50, datos.foto_cen_y ?? 50, u);
+    ctx.restore();
+    ctx.beginPath();
+    ctx.arc(cx, cy, radio - C.anillo * u / 2, 0, Math.PI * 2);
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = C.anillo * u;
+    ctx.stroke();
+  }
 
   ctx.fillStyle = degradadoNegro(ctx, alto);
   ctx.fillRect(0, 0, ancho, alto);

@@ -10,11 +10,8 @@ export const MARCA = {
   cuenta: '@eyey.cl',
 
   logo:   'marca/logo.png',
-  /* La lámina de cierre. Si existe el archivo, se usa ese: se pinta el fondo
-     con el color de la paleta y el PNG va encima, así el mismo arte sirve en
-     cualquier color. Si el archivo no está, el dibujante arma una con las
-     piezas de la marca. Para cambiarla no hace falta publicar una versión:
-     alcanza con dejar el PNG en esta carpeta, que el actualizador no toca. */
+  /* Todavía no hay lámina de cierre para este medio: vacío quiere decir que
+     el post termina en la última foto, sin firma al final. */
   cierre: 'marca/cierre.png',
 
   /* Lo que va en la huincha de abajo, a la izquierda de las flechas. */
@@ -45,8 +42,10 @@ export const MARCA = {
     diseno: 'unica',
   },
 
-  /* Una sola foto de fondo: no hay armados que elegir. */
-  disenos: false,
+  /* Los cuatro armados, igual que el otro medio: una foto o dos, con o sin
+     el círculo. Acá la foto va a sangre, así que dos fotos son las dos
+     mitades del cuadro en vez de dos recuadros con márgenes. */
+  disenos: true,
 
   /* Por ahora solo la placa normal. El urgente y el reel están dibujados con
      la pieza gráfica del otro medio, así que se esconden hasta tener la de
