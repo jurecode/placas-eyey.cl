@@ -7,7 +7,7 @@
 <meta name="robots" content="noindex, nofollow">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter+Tight:wght@500;900&family=Poppins:ital,wght@0,700;0,900;1,800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter+Tight:wght@500;700;900&family=Poppins:ital,wght@0,700;0,900;1,800&display=swap" rel="stylesheet">
 <style>
   :root{
     /* Gris neutro y oscuro, al estilo de un panel de control. El editor
@@ -46,6 +46,8 @@
   button:disabled{ opacity:.5; cursor:default }
   /* el texto va oscuro: la acción principal es una pastilla blanca */
   button.principal{ background:var(--acento); border-color:var(--acento); color:#111; font-weight:650 }
+  /* el enlace que lleva al editor a entrar, con forma de botón */
+  a.boton-enlace{ display:inline-block; padding:9px 16px; border-radius:99px; background:var(--acento); color:#111; font-weight:650; text-decoration:none }
   /* el blanco no se puede aclarar más, así que al pasar por encima baja */
   button.principal:hover{ background:#e6e6e8 }
   input, select, textarea{

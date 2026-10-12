@@ -4,11 +4,13 @@
  * las placas y las fotos se guardan en MySQL a través de api/, así que son
  * las mismas desde cualquier dispositivo. */
 
-import { dibujarCierre, dibujarReel, dibujarFoto, esperarTipografias, textoSobre, LIENZO, altoDe, REEL } from './placa.js';
+import { dibujarCierre, dibujarReel, dibujarFoto, esperarTipografias, textoSobre, LIENZO, altoDe, REEL,
+         prepararVoz, VOZ } from './placa.js';
 import * as somosPuerto from './placa.js';
 import * as eyey from './dibujo-eyey.js';
 import { MARCA } from './marca/marca.js';
 import { armarMp4, leerMp4, RELOJ } from './mp4.js';
+import { leerAudio, medirVoz, grabarVoz } from './voz.js';
 
 /* Cada medio tiene su dibujante y la marca dice cuál. Lo que se le pasa de
    más —el nombre, el pie— lo ignora el que no lo necesita. */
@@ -65,7 +67,10 @@ const BASE = {
   foto_cen: 'assets/marcador.jpg', foto_cen_x: 50, foto_cen_y: 50, foto_cen_ajuste: 'completa',
   color_fondo: '#ff0054',
   color_filete: '#0ae7ae',
-  circulo_x: 50, circulo_y: 62.6,
+  /* Era 62,6, la del arte original. Al agrandar el titular el diseño subió
+     el círculo al medio, pero como cada placa nueva guardaba su 62,6, el
+     cambio no le llegaba a ninguna: quedaba debajo de las letras. */
+  circulo_x: 50, circulo_y: 50,
   laminas: [],            // fotos extra del carrusel; la placa es la primera
   descripcion: '', hashtags: '', colaboradores: '', etiquetados: '',
   // cada medio pisa lo que le corresponde: su cuerpo de letra, sus colores
@@ -81,7 +86,9 @@ const MAX_LAMINAS = 8;   // 8 + la placa + el cierre = las 10 que permite Instag
    sobrescribe al actualizar —para eso está—, así que un sitio instalado hace
    meses sigue con el valor que tenía el día que se instaló: si la regla
    dependiera de eso, el cierre desaparecería sin motivo visible. */
-const llevaCierre = () => placa.formato !== 'reel' && CIERRE !== false;
+// el reel y la placa con voz son un solo video: no hay lámina de cierre.
+// La urgente tampoco: es un aviso al toque, y el «síguenos» al final le sobra
+const llevaCierre = () => !['reel', 'voz', 'urgente'].includes(placa.formato) && CIERRE !== false;
 
 /* El arte del cierre. Puede venir en dos versiones, clara y oscura, porque
    una sola no se lee sobre toda la paleta: la clara desaparece en el fondo
@@ -120,6 +127,17 @@ const REELS = {
   video: '', portada: '',
 };
 
+/* La placa con voz: la de noticia, con un audio que la vuelve video. El
+   círculo arranca más arriba: abajo quedaría detrás de la franja del
+   reproductor. */
+const VOZ_PLACA = {
+  ...BASE,
+  formato: 'voz',
+  titulo: 'Titular del\naudio',
+  circulo_y: 30,
+  audio: '', audio_nombre: '', audio_dura: 0,
+};
+
 const URGENTE = {
   ...BASE,
   formato: 'urgente',
@@ -136,22 +154,53 @@ const URGENTE = {
    existe en todos los navegadores. */
 const clave = () => localStorage.getItem('clave_publicar') || '';
 
+/* Cuando el servidor no manda datos sino una página de error del hosting,
+   qué decir. 429 es el límite de pedidos de SiteGround; 5xx, casi siempre,
+   un pedido que tardó más de lo que el hosting espera. */
+function motivoHttp(status){
+  if(status === 429) return 'El hosting frenó los pedidos por un rato (límite de SiteGround). Esperá un minuto y probá de nuevo.';
+  if(status >= 500) return `El hosting cortó el pedido (error ${status}). Esperá un minuto y probá de nuevo.`;
+  return `Error ${status}`;
+}
+
 async function api(ruta, opciones = {}){
+  /* Sin credencial no se pregunta nada: el panel de actividad y otros que
+     consultan solos arrancan antes de que se sepa si hay sesión, y su 401
+     tapaba la pantalla de entrar con un «la sesión venció» que no era. */
+  if(!clave()){
+    const e = new Error('Todavía no se entró');
+    e.esClave = true;
+    e.status = 401;
+    throw e;
+  }
   const res = await fetch(ruta, {
     ...opciones,
     headers: { 'x-clave': clave(), ...(opciones.headers || {}) },
   });
   const datos = await res.json().catch(() => ({}));
   if(res.status === 401){
-    localStorage.removeItem('clave_publicar');
-    pantallaClave('La clave no es la correcta.');
+    // varios pedidos pueden volver con 401 a la vez: la pantalla se arma una sola vez
+    if(clave()){
+      localStorage.removeItem('clave_publicar');
+      pantallaIngreso('La sesión se cerró o venció: entrá de nuevo.');
+    }
     // se marca para que el arranque no tape la pantalla de la clave con
     // la de error genérico
     const e = new Error(datos.error || 'Clave incorrecta');
     e.esClave = true;
+    e.status = 401;
     throw e;
   }
-  if(!res.ok) throw new Error(datos.error || `Error ${res.status}`);
+  if(!res.ok){
+    /* El código y lo que mandó el servidor viajan con el error: quien llama
+       tiene que poder distinguir «esperá y reintentá» (429, 503) de «esto no
+       va a andar nunca» (400, 413). Antes todo llegaba como un texto. */
+    const e = new Error(datos.error || motivoHttp(res.status));
+    e.status = res.status;
+    e.datos = datos;
+    e.reintentarEn = Number(res.headers.get('Retry-After')) || 0;
+    throw e;
+  }
   if(datos && datos.error) throw new Error(datos.error);
   return datos;
 }
@@ -172,7 +221,45 @@ const escribirPlaca = (p) => api('api/placas.php', {
    conexión muerta falla en un minuto en vez de nunca. */
 const TROZO = 2 * 1024 * 1024;
 const ENTERO_HASTA = 4 * 1024 * 1024;
-const PLAZO_TROZO = 90_000;
+/* Era 90 s. Como un pedazo que no contesta ahora se reintenta, no hace
+   falta esperarlo tanto: 90 s con la barra quieta era justamente el «se
+   pega». Dos megas en 60 s son 35 KB/s, menos que un 3G malo. */
+const PLAZO_TROZO = 60_000;
+
+/* El hosting limita cuánto se le pide: cuando se pasa, contesta 429 a todo
+   el sitio por un rato. Una subida son decenas de pedidos seguidos, así que
+   es lo primero que lo dispara, y antes un solo 429 tiraba la subida entera
+   —«Error 429»— y había que empezar de cero, que es pedir todavía más.
+   Ahora un pedazo rechazado por algo pasajero se espera y se reintenta,
+   cada vez un poco más, y la subida sigue desde donde quedó. */
+const REINTENTOS = 6;   // 2 + 4 + 8 + 16 + 30 + 30 s: un minuto y medio de margen
+
+/* Lo que vale la pena reintentar: sin respuesta (red caída, plazo vencido),
+   saturado (429), el servidor que se cayó un momento (5xx), o «falta un
+   pedazo» (409), que se arregla retomando. Una clave mala, un formato que no
+   va o un archivo demasiado grande van a fallar igual la próxima vez. */
+const pasajero = (e) => !e.status || [408, 409, 425, 429].includes(e.status) || e.status >= 500;
+
+/* Cuánto esperar antes del intento `n`. Si el servidor dice cuánto
+   (Retry-After), manda él, pero con tope: un «volvé en una hora» dejaría la
+   subida colgada sin que nadie se entere. */
+const esperaDe = (n, e) => (e?.reintentarEn
+  ? Math.min(60_000, e.reintentarEn * 1000)
+  : Math.min(30_000, 2000 * 2 ** n));
+
+/* El mensaje que queda si después de todos los intentos no se pudo. Dice
+   cuánto se esperó de verdad: depende de lo que haya pedido el servidor. */
+function motivoFinal(e, esperado){
+  if(e.status === 429){
+    return new Error(`El hosting está limitando los pedidos al sitio (429) y no se liberó `
+      + `en ${REINTENTOS} intentos (${Math.round(esperado / 1000)} s esperando). Esperá unos `
+      + 'minutos y probá de nuevo; si sigue, es el límite del plan del hosting.');
+  }
+  return e;
+}
+
+const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
+
 /* Sin esto PHP intenta leer el binario como si fuera un formulario y ensucia
    la respuesta con avisos que rompen el JSON. */
 const BINARIO = { 'Content-Type': 'application/octet-stream' };
@@ -190,40 +277,83 @@ async function conPlazo(ruta, opciones, ms){
   }finally{ clearTimeout(reloj); }
 }
 
+/* `avisar(fraccion, nota)`: la nota llega solo mientras se espera para
+   reintentar, para que la barra diga por qué está quieta en vez de parecer
+   colgada. Quien no la use puede ignorarla. */
 async function guardarFoto(archivo, avisar){
   const arranque = Date.now();
+  let reintentos = 0;
+  let esperado = 0;   // ms en pausa entre intentos, para decirlo si al final no se pudo
   const contar = (r) => {
     const ms = Date.now() - arranque;
     anotar('subida', { peso: mb(archivo.size), tardo: seg(ms),
-      velocidad: (archivo.size / 1048576 / (ms / 1000)).toFixed(2) + ' MB/s' });
+      velocidad: (archivo.size / 1048576 / (ms / 1000)).toFixed(2) + ' MB/s',
+      ...(reintentos ? { reintentos } : {}) });
     return r;
   };
   const fallo = (e) => {
     anotar('subida cortada', { peso: mb(archivo.size), tardo: seg(Date.now() - arranque),
-      porque: String(e.message).slice(0, 120), nivel: 'mal' });
+      porque: String(e.message).slice(0, 120), reintentos, nivel: 'mal' });
     throw e;
   };
+  /* Un intento falló por algo pasajero: se anota, se dice en pantalla y se
+     espera. Si ya no quedan intentos, el error sigue de largo. */
+  const antesDeReintentar = async (e, n, fraccion) => {
+    if(!pasajero(e) || n >= REINTENTOS) throw motivoFinal(e, esperado);
+    reintentos++;
+    const ms = esperaDe(n, e);
+    esperado += ms;
+    const que = e.status === 429 ? 'el hosting está limitando los pedidos'
+      : e.status ? `el servidor contestó ${e.status}` : 'no hubo respuesta';
+    anotar('subida reintentada', { intento: n + 1, porque: que,
+      espera: seg(ms), va: Math.round(fraccion * 100) + '%', nivel: 'aviso' });
+    avisar?.(fraccion, `Pausa: ${que}. Se reintenta en ${Math.round(ms / 1000)} s `
+      + `(intento ${n + 1} de ${REINTENTOS}); no hace falta hacer nada.`);
+    await dormir(ms);
+  };
 
-  if(archivo.size <= ENTERO_HASTA){
-    return conPlazo('api/fotos.php',
-      { method: 'POST', body: archivo, headers: BINARIO }, PLAZO_TROZO)
-      .then(contar, fallo);
-  }
   try{
-  const sesion = (crypto.randomUUID?.() || Math.random().toString(36) + Date.now())
-    .replace(/[^a-zA-Z0-9]/g, '');
-  let enviado = 0;
-  for(let desde = 0; desde < archivo.size; desde += TROZO){
-    const pedazo = archivo.slice(desde, desde + TROZO);
-    const ultimo = desde + TROZO >= archivo.size;
-    const r = await conPlazo(
-      `api/fotos.php?trozo=1&sesion=${sesion}${ultimo ? '&fin=1' : ''}`,
-      { method: 'POST', body: pedazo, headers: BINARIO }, PLAZO_TROZO);
-    enviado += pedazo.size;
-    avisar?.(enviado / archivo.size);
-    if(ultimo) return contar(r);
-  }
-  throw new Error('El archivo llegó vacío');
+    if(archivo.size <= ENTERO_HASTA){
+      for(let n = 0; ; n++){
+        try{
+          return contar(await conPlazo('api/fotos.php',
+            { method: 'POST', body: archivo, headers: BINARIO }, PLAZO_TROZO));
+        }catch(e){ await antesDeReintentar(e, n, 0); }
+      }
+    }
+
+    const sesion = (crypto.randomUUID?.() || Math.random().toString(36) + Date.now())
+      .replace(/[^a-zA-Z0-9]/g, '');
+    /* El servidor dice cuánto tiene y se sigue desde ahí. Así un reintento
+       nunca duplica un pedazo ni deja un hueco, y una subida cortada a la
+       mitad retoma en vez de empezar de cero. */
+    let desde = 0;
+    let n = 0;   // intentos fallidos seguidos; vuelve a cero con cada pedazo que entra
+    while(desde < archivo.size){
+      const pedazo = archivo.slice(desde, desde + TROZO);
+      const ultimo = desde + pedazo.size >= archivo.size;
+      try{
+        const r = await conPlazo(
+          `api/fotos.php?trozo=1&sesion=${sesion}&desde=${desde}`
+            + (ultimo ? `&fin=1&total=${archivo.size}` : ''),
+          { method: 'POST', body: pedazo, headers: BINARIO }, PLAZO_TROZO);
+        if(ultimo) return contar(r);
+        desde = Number.isFinite(r.recibido) ? r.recibido : desde + pedazo.size;
+        n = 0;
+        avisar?.(desde / archivo.size);
+      }catch(e){
+        // «falta algo»: el servidor dice desde dónde, y se sigue sin esperar
+        if(e.status === 409 && Number.isFinite(e.datos?.recibido) && n < REINTENTOS){
+          anotar('subida retomada', { desde: mb(e.datos.recibido), porque: e.message, nivel: 'aviso' });
+          desde = e.datos.recibido;
+          n++;
+          continue;
+        }
+        await antesDeReintentar(e, n, desde / archivo.size);
+        n++;
+      }
+    }
+    throw new Error('El archivo llegó vacío');
   }catch(e){ return fallo(e); }
 }
 
@@ -262,10 +392,19 @@ const esc = (s) => String(s).replace(/[&<>"]/g,
 /* Con el teclado abierto, la vista previa entera no dejaba lugar para el
    campo que se estaba escribiendo. Mientras se escribe se achica y se guarda
    lo que no sirve en ese momento; al terminar, vuelve. */
-const esCampo = (el) => el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+/* Solo los campos donde se escribe, que son los que abren el teclado.
+   Antes entraba cualquier INPUT, controles deslizantes incluidos: al tocar
+   el de X o el de Y, la vista se achicaba y el panel se corría para
+   centrarlo, y el control se iba de abajo del dedo mientras se arrastraba. */
+const TIPOS_DE_TEXTO = ['text', 'search', 'email', 'url', 'tel', 'number', 'password'];
+const esCampo = (el) => !!el && (el.tagName === 'TEXTAREA'
+  || (el.tagName === 'INPUT' && TIPOS_DE_TEXTO.includes(el.type)));
+// el teclado que tapa el campo es cosa del teléfono: en la computadora no hay nada que esquivar
+const enTelefono = () => matchMedia('(max-width: 900px)').matches;
 
 document.addEventListener('focusin', (ev) => {
   if(!esCampo(ev.target)) return;
+  if(!enTelefono()) return;
   document.body.classList.add('escribiendo');
   // ya achicada la vista, el campo puede haber quedado debajo del teclado
   setTimeout(() => ev.target.scrollIntoView({ block: 'center', behavior: 'smooth' }), 250);
@@ -298,7 +437,6 @@ function anotar(evento, datos = {}){
     const libro = leerBitacora();
     libro.push(linea);
     localStorage.setItem(BITACORA, JSON.stringify(libro.slice(-TOPE_BITACORA)));
-    if(document.getElementById('bitacora')) pintarBitacora();
   }catch(e){ /* si no hay lugar, se sigue sin anotar */ }
 }
 
@@ -309,27 +447,6 @@ function leerBitacora(){
 
 const mb = (bytes) => (bytes / 1048576).toFixed(2) + ' MB';
 const seg = (ms) => (ms / 1000).toFixed(1) + 's';
-
-/* Lo que se muestra: una línea por evento, la más nueva arriba. */
-function pintarBitacora(){
-  const caja = document.getElementById('bitacora');
-  if(!caja) return;
-  const libro = leerBitacora();
-  if(!libro.length){
-    caja.innerHTML = '<p class="nota">Todavía no hay nada anotado. Se llena sola al subir o publicar.</p>';
-    return;
-  }
-  const hora = (t) => new Date(t).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  caja.innerHTML = libro.slice().reverse().map((l) => {
-    const { t, evento, nivel, ...resto } = l;
-    const detalle = Object.entries(resto)
-      .map(([k, v]) => `${k}: ${v}`).join(' · ');
-    return `<li class="${esc(nivel || 'ok')}">
-      <b>${esc(hora(t))}</b>
-      <span><i>${esc(evento)}</i>${detalle ? ' — ' + esc(detalle) : ''}</span>
-    </li>`;
-  }).join('');
-}
 
 /* ------------------------------------------------------------------ */
 /* secciones, en el teléfono                                           */
@@ -347,21 +464,59 @@ function loQueFalta(){
   if(placa.formato === 'reel' && !fuenteDelReel()){
     falta.push({ seccion: 'fotos', que: 'Falta el video del reel.' });
   }
+  if(placa.formato === 'voz' && !placa.audio){
+    falta.push({ seccion: 'fotos', que: 'Falta el audio con la voz.' });
+  }
   if(!String(placa.titulo || '').trim()){
     falta.push({ seccion: 'titular', que: 'Falta el titular.' });
   }
   return falta;
 }
 
-function irA(seccion){
-  document.body.dataset.seccion = seccion;
+function marcarSeccion(seccion){
   document.querySelectorAll('[data-ir]').forEach((b) => {
     b.classList.toggle('activa', b.dataset.ir === seccion);
   });
-  // al cambiar de sección se vuelve arriba: si no, se entra a la mitad
-  document.querySelector('.panel')?.scrollTo({ top: 0 });
-  localStorage.setItem('seccion', seccion);
 }
+
+/* En el teléfono se ve una sección por vez; en la computadora están todas,
+   una debajo de otra, y la barra de la izquierda lleva hasta cada una. */
+function irA(seccion, suave = false){
+  document.body.dataset.seccion = seccion;
+  marcarSeccion(seccion);
+  localStorage.setItem('seccion', seccion);
+  if(enTelefono()){
+    /* al cambiar de sección se vuelve arriba: si no, se entra a la mitad.
+       Es la página la que se mueve —la placa queda fija arriba—, no el panel. */
+    window.scrollTo({ top: 0 });
+    return;
+  }
+  const destino = [...document.querySelectorAll(`.panel fieldset[data-seccion="${seccion}"]`)]
+    .find((f) => f.offsetParent !== null);
+  if(destino) destino.scrollIntoView({ block: 'start', behavior: suave ? 'smooth' : 'auto' });
+}
+
+/* En la computadora la barra marca en qué sección se está mientras se baja:
+   la última que ya pasó por arriba. Al llegar al final del panel, la última. */
+/* Se calcula en el momento y no esperando al próximo cuadro de pantalla: el
+   navegador ya manda el evento a lo sumo una vez por cuadro, y esperar otro
+   más dejaba la marca atrasada una sección —o dos, en un equipo cargado—. */
+document.querySelector('.panel')?.addEventListener('scroll', (ev) => {
+  if(enTelefono()) return;
+  const panel = ev.target;
+  const visibles = [...panel.querySelectorAll('fieldset[data-seccion]')].filter((f) => f.offsetParent !== null);
+  if(!visibles.length) return;
+  let actual = visibles[0].dataset.seccion;
+  const tope = panel.getBoundingClientRect().top + 90;
+  for(const f of visibles){
+    if(f.getBoundingClientRect().top <= tope) actual = f.dataset.seccion;
+    else break;
+  }
+  if(panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 4){
+    actual = visibles[visibles.length - 1].dataset.seccion;
+  }
+  marcarSeccion(actual);
+}, { passive: true });
 
 /* La barra muestra solo las secciones que este formato usa, y marca las que
    tienen algo sin llenar. */
@@ -372,8 +527,9 @@ function pintarBarra(){
   const falta = loQueFalta();
   const urgente = placa.formato === 'urgente';
   const reel = placa.formato === 'reel';
+  const voz = placa.formato === 'voz';
   const sobra = { fotos: urgente, etiqueta: urgente, color: urgente,
-                  carrusel: reel, titular: false, texto: false, mas: false };
+                  carrusel: reel || voz, titular: false, texto: false, mas: false };
 
   barra.querySelectorAll('[data-ir]').forEach((b) => {
     b.hidden = !!sobra[b.dataset.ir];
@@ -387,82 +543,29 @@ function pintarBarra(){
 
 $('#barra')?.addEventListener('click', (ev) => {
   const b = ev.target.closest('[data-ir]');
-  if(b) irA(b.dataset.ir);
+  if(b) irA(b.dataset.ir, true);
 });
 
 function verVista(mostrar){
   document.body.classList.toggle('sin_vista', !mostrar);
   localStorage.setItem('sin_vista', mostrar ? '' : '1');
 }
-/* La calidad es del aparato, no de la placa: quien publica desde el teléfono
-   con datos quiere rápida y desde la oficina quiere alta. */
-function pintarCalidad(){
-  document.querySelectorAll('[data-marca-video]').forEach((b) => {
-    b.classList.toggle('activo', b.dataset.marcaVideo === (marcaEnVideo() ? 'si' : 'no'));
-  });
-  document.querySelectorAll('[data-camino]').forEach((b) => {
-    const cual = localStorage.getItem('codecs_rapido') === '0' ? 'compatible' : 'rapido';
-    b.classList.toggle('activo', b.dataset.camino === cual);
-  });
-  document.querySelectorAll('[data-calidad]').forEach((b) => {
-    b.classList.toggle('activo', b.dataset.calidad === calidadVideo());
-  });
-}
-/* La salida de emergencia, a mano y no escondida en el almacenamiento del
-   navegador: si Instagram rechaza un video, hay que poder volver al camino de
-   antes sin esperar a que alguien toque el código. */
-$('#marca_video')?.addEventListener('click', (ev) => {
-  const b = ev.target.closest('[data-marca-video]');
-  if(!b) return;
-  localStorage.setItem('marca_en_video_2', b.dataset.marcaVideo === 'no' ? '0' : '1');
-  quemados.clear();   // lo grabado antes ya no vale
-  pintarCalidad();
-  repintar();         // la previa muestra lo que se va a subir, así que cambia
-  pintarLaminas();
-  estado(b.dataset.marcaVideo === 'no'
-    ? 'Los videos se van a subir tal cual, sin recomprimir. Pesan mucho menos.'
-    : 'A los videos se les va a quemar el degradado y el logo encima.');
-});
-
-$('#camino')?.addEventListener('click', (ev) => {
-  const c = ev.target.closest('[data-camino]');
-  if(!c) return;
-  localStorage.setItem('codecs_rapido', c.dataset.camino === 'compatible' ? '0' : '1');
-  pintarCalidad();
-  estado(c.dataset.camino === 'compatible'
-    ? 'Los videos se van a armar con el navegador, como antes.'
-    : 'Los videos se arman acá: más rápido y sin perder cuadros.');
-});
-
-$('#calidad')?.addEventListener('click', (ev) => {
-  const b = ev.target.closest('[data-calidad]');
-  if(!b) return;
-  localStorage.setItem('calidad_video', b.dataset.calidad);
-  pintarCalidad();
-  estado(b.dataset.calidad === 'rapida'
-    ? 'Los videos van a pesar un tercio menos y subir más rápido.'
-    : 'Los videos van a salir con la mejor calidad posible.');
-});
-pintarCalidad();
-
-/* La lista de lo que hay en curso, refrescada sola mientras se mira.
-   Solo se pregunta cuando la sección está a la vista: no tiene sentido
-   golpear el servidor cada cinco segundos mientras alguien escribe un
-   titular. */
+/* La lista de lo que hay en curso. Devuelve cuántas cosas hay, que es lo
+   que decide cada cuánto volver a preguntar. */
 async function pintarEnCurso(){
   const donde = $('#en_curso');
-  if(!donde) return;
+  if(!donde) return 0;
   let lista = [];
   try{
     const { actividad } = await api('api/actividad.php');
     lista = actividad || [];
   }catch(e){
     donde.innerHTML = `<li class="libre">No se pudo consultar: ${esc(e.message)}</li>`;
-    return;
+    return 0;
   }
   if(!lista.length){
     donde.innerHTML = '<li class="libre">Nada en curso.</li>';
-    return;
+    return 0;
   }
   const ahora = Date.now() / 1000;
   donde.innerHTML = lista.map((x) => {
@@ -475,115 +578,37 @@ async function pintarEnCurso(){
         ${x.paso ? '· ' + esc(x.paso) : ''}</small>
     </li>`;
   }).join('');
+  return lista.length;
 }
 
-/* Se pregunta cada cinco segundos mientras la pestaña esté a la vista.
-   Antes esto miraba si la sección estaba en pantalla, para no molestar al
-   servidor de más. No funcionaba: la sección puede no tener tamaño todavía
-   cuando se la empieza a vigilar, y entonces nunca cuenta como visible y la
-   lista no se llena nunca. El ahorro no valía la complicación —es un pedido
-   diminuto— y con la pestaña de fondo el navegador ya lo frena solo. */
+/* Cada cuánto se pregunta. Era cada cinco segundos, siempre, con la idea de
+   que es un pedido diminuto. Diminuto para el navegador: en el servidor
+   cada uno arranca PHP y abre la base, y son 720 por hora por pestaña. Una
+   computadora con el editor abierto todo el día eran unos 17.000 pedidos
+   diarios sin que nadie publicara nada, y el hosting limita justamente la
+   cantidad de pedidos: se gastaba el margen que después le faltaba a la
+   subida de un video.
+   Ahora, sin nada en curso, se pregunta cada 30 s —lo nuevo aparece en
+   medio minuto como mucho—; mientras alguien publica, cada 8 s, que es
+   cuando interesa seguirlo de cerca. Con la pestaña de fondo no se pregunta,
+   y al volver se pregunta en el acto.
+   (Antes esto miraba si la sección estaba en pantalla. No funcionaba: la
+   sección puede no tener tamaño todavía cuando se la empieza a vigilar, y
+   entonces nunca cuenta como visible y la lista no se llena nunca.) */
+const CADA_SIN_NADA = 30_000;
+const CADA_CON_ALGO = 8_000;
+let proximaConsulta = null;
+async function vigilarEnCurso(){
+  clearTimeout(proximaConsulta);
+  const hay = document.hidden ? 0 : await pintarEnCurso();
+  proximaConsulta = setTimeout(vigilarEnCurso, hay ? CADA_CON_ALGO : CADA_SIN_NADA);
+}
 if($('#en_curso')){
-  pintarEnCurso();
-  setInterval(() => { if(!document.hidden) pintarEnCurso(); }, 5000);
+  vigilarEnCurso();
   document.addEventListener('visibilitychange', () => {
-    if(!document.hidden) pintarEnCurso();
+    if(!document.hidden) vigilarEnCurso();
   });
 }
-
-/* Lo que está subido en el servidor.
-   La carpeta está cerrada al público —pedirla de frente devuelve 403— y así
-   tiene que seguir, pero cuando Instagram rechaza un video lo primero que uno
-   quiere es abrirlo y mirar qué se le mandó. Acá se listan los archivos y
-   cada video se puede reproducir en el momento.
-   Las medidas se miden en el navegador y no en el servidor: son el dato que
-   más importa —Instagram no acepta un carrusel con piezas de proporciones
-   distintas— y para saberlas en PHP haría falta leer el contenedor a mano. */
-$('#ver_archivos')?.addEventListener('click', async () => {
-  const boton = $('#ver_archivos');
-  boton.disabled = true;
-  boton.textContent = 'Buscando…';
-  try{
-    const { archivos, total } = await api('api/fotos.php?tarea=listar&cuantos=40');
-    $('#cuantos_archivos').textContent = `${archivos.length} de ${total}`;
-    $('#archivos').innerHTML = archivos.map((f) => `
-      <li data-archivo="${esc(f.url)}">
-        ${f.tipo === 'video'
-          ? `<video src="${esc(f.url)}" preload="metadata" controls muted playsinline></video>`
-          : `<img src="${esc(f.url)}" alt="" loading="lazy">`}
-        <div>
-          <b>${esc(f.nombre)}</b>
-          <small>${mb(f.bytes)} · ${new Date(f.cuando).toLocaleString('es-CL')}</small>
-          <small data-medidas>${f.tipo === 'video' ? 'midiendo…' : ''}</small>
-          <input class="enlace" type="text" readonly value="${esc(f.url)}"
-                 aria-label="Dirección del archivo">
-          <div class="fila" style="margin-top:6px">
-            <button class="descarga" data-copiar-enlace="${esc(f.url)}">Copiar el link</button>
-            <a href="${esc(f.url)}" target="_blank" rel="noopener">abrirlo aparte</a>
-          </div>
-        </div>
-      </li>`).join('') || '<li><div><b>No hay nada subido todavía.</b></div></li>';
-
-    /* La proporción de la salida, para poder comparar de un vistazo. */
-    const buena = altoDe(ANCHO_FEED) / ANCHO_FEED;
-    for(const li of $('#archivos').children){
-      const v = li.querySelector('video');
-      const donde = li.querySelector('[data-medidas]');
-      if(!v || !donde) continue;
-      await new Promise((ok) => { v.onloadedmetadata = ok; v.onerror = ok; setTimeout(ok, 6000); });
-      if(!v.videoWidth){ donde.textContent = 'no se pudo leer'; continue; }
-      const suya = v.videoHeight / v.videoWidth;
-      const cuadra = Math.abs(suya - buena) < 0.01;
-      donde.textContent = `${v.videoWidth}x${v.videoHeight} · ${seg((v.duration || 0) * 1000)}`
-        + (cuadra ? ' · la proporción del carrusel'
-                  : ` · OJO: el carrusel va en ${ANCHO_FEED}x${altoDe(ANCHO_FEED)}`);
-      donde.classList.toggle('mal', !cuadra);
-    }
-  }catch(e){ $('#cuantos_archivos').textContent = e.message; }
-  boton.disabled = false;
-  boton.textContent = 'Actualizar la lista';
-});
-
-/* La dirección completa, para poder pegarla en otro lado: probarla en el
-   navegador de otra persona, mandarla, o pasarla por el depurador de
-   Instagram, que es lo que sirve cuando rechaza un video sin decir por qué.
-   El campo se puede seleccionar entero con un toque, y el botón la copia. */
-$('#archivos')?.addEventListener('click', async (ev) => {
-  const caja = ev.target.closest('.enlace');
-  if(caja){ caja.select(); return; }
-  const boton = ev.target.closest('[data-copiar-enlace]');
-  if(!boton) return;
-  try{
-    await navigator.clipboard.writeText(boton.dataset.copiarEnlace);
-    boton.textContent = 'Copiado';
-  }catch(e){
-    // sin permiso para el portapapeles queda seleccionado, que alcanza
-    boton.closest('div').parentNode.querySelector('.enlace')?.select();
-    boton.textContent = 'Seleccionado: copialo';
-  }
-  setTimeout(() => { boton.textContent = 'Copiar el link'; }, 2500);
-});
-
-/* Copiar sirve para mandármela: lo que se copia es texto plano, una línea
-   por evento, que se pega en cualquier lado. */
-$('#copiar_bitacora')?.addEventListener('click', async () => {
-  const libro = leerBitacora();
-  const texto = libro.map((l) => {
-    const { t, evento, nivel, ...resto } = l;
-    const detalle = Object.entries(resto).map(([k, v]) => `${k}=${v}`).join(' ');
-    return `${new Date(t).toLocaleString('es-CL')}  ${evento}${detalle ? '  ' + detalle : ''}`;
-  }).join('\n');
-  try{
-    await navigator.clipboard.writeText(texto || 'sin nada anotado');
-    estado(`Copiadas ${libro.length} líneas`);
-  }catch(e){ estado('No se pudo copiar: ' + e.message, true); }
-});
-
-$('#limpiar_bitacora')?.addEventListener('click', () => {
-  localStorage.removeItem(BITACORA);
-  pintarBitacora();
-  estado('Bitácora borrada');
-});
 
 $('#encoger')?.addEventListener('click', () => verVista(false));
 $('#mostrar_vista')?.addEventListener('click', () => verVista(true));
@@ -793,7 +818,7 @@ async function imagenesDe(p){
     cargarImagen(p.foto_izq), cargarImagen(p.foto_der),
     cargarImagen(p.foto_cen), cargarImagen(LOGO),
   ]);
-  return { izq, der, cen, logo };
+  return { izq, der, cen, logo, firma };
 }
 
 /* ------------------------------------------------------------------ */
@@ -863,6 +888,7 @@ async function videoParaPrevia(ruta){
    con requestAnimationFrame a propósito: rAF no corre si la pestaña está
    en segundo plano y la vista previa quedaría congelada. */
 function repintar(){
+  detenerVoz();   // si estaba sonando, lo que se ve ya no corresponde
   clearTimeout(pendiente);
   clearInterval(bucleReel);   // si había una capa animándose, se rearma abajo
   bucleReel = null;
@@ -914,7 +940,7 @@ function repintar(){
             const a = Math.min(1, (reproductor.currentTime || 0) / ANIMACION);
             if(a === ultimo) return;
             ultimo = a;
-            dibujarReel(ctx, placa, null, logo, REEL.ancho, REEL.alto, a, true);
+            dibujarReel(ctx, placa, null, logo, REEL.ancho, REEL.alto, a, true, firma);
           };
           encima();
           bucleReel = setInterval(encima, 80);
@@ -922,7 +948,25 @@ function repintar(){
           ctx.clearRect(0, 0, lienzo.width, lienzo.height);   // ya viene quemado
         }else{
           dibujarReel(ctx, placa, await cargarImagen(placa.portada),
-            await cargarImagen(LOGO), REEL.ancho, REEL.alto, 1);
+            await cargarImagen(LOGO), REEL.ancho, REEL.alto, 1, false, firma);
+        }
+        await pintarTira();
+        return;
+      }
+      if(placa.formato === 'voz'){
+        soltarVideoLamina();
+        /* Se muestra el momento en que el titular ya entró, con la voz de
+           ese instante. Si el audio todavía no se midió —la placa se abrió
+           otro día—, se mide de fondo y se vuelve a dibujar; mientras tanto
+           van barras de muestra. */
+        const voz = vozEnMemoria();
+        const dura = voz ? voz.audio.duracion : (placa.audio_dura || 12);
+        const pintor = prepararVoz(placa, await imagenesDe(placa), lienzo.width, dura);
+        const t = Math.min(dura, pintor.finEntrada + 0.6);
+        if(voz) pintor.cuadro(ctx, t, ...vozEn(voz, t));
+        else pintor.cuadro(ctx, t);
+        if(!voz && placa.audio){
+          vozDePlaca().then(() => { if(mia === generacionLamina) repintar(); }).catch(() => {});
         }
         await pintarTira();
         return;
@@ -986,6 +1030,15 @@ async function pintarTira(){
     const compartirR = $('#compartir');
     if(compartirR) compartirR.hidden = true;
     // en el reel el video se baja con su propio botón, no con el del carrusel
+    $('#bajar_videos').hidden = true;
+    return;
+  }
+  if(placa.formato === 'voz'){
+    $('#rotulo_tira').textContent = placa.audio
+      ? `Voz · un video 4:5 de ${enMinutos(placa.audio_dura || 0)}` : 'Voz · falta el audio';
+    tira.innerHTML = '';
+    const compartirV = $('#compartir');
+    if(compartirV) compartirV.hidden = true;
     $('#bajar_videos').hidden = true;
     return;
   }
@@ -1215,10 +1268,33 @@ async function pintarFotos(){
         <b class="sub">Posición del círculo</b>
         <div class="encuadre">
           <span>X</span><input type="range" data-campo="circulo_x" min="8" max="92" step="0.5" value="${placa.circulo_x ?? 50}">
-          <span>Y</span><input type="range" data-campo="circulo_y" min="8" max="92" step="0.5" value="${placa.circulo_y ?? 62.6}">
+          <span>Y</span><input type="range" data-campo="circulo_y" min="8" max="92" step="0.5" value="${placa.circulo_y ?? 50}">
         </div>` : ''}
       </div>
     </div>`).join('');
+  if(placa.formato === 'voz'){
+    const nombre = placa.audio_nombre ? esc(placa.audio_nombre) : '';
+    $('#fotos').insertAdjacentHTML('afterbegin', `
+      <div class="foto" data-audio>
+        <div class="icono-audio" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/>
+          <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8.5 21h7"/></svg></div>
+        <div class="cuerpo">
+          <b>Audio con la voz</b>
+          <button type="button" class="archivo"
+                  onclick="this.parentNode.querySelector('input').click()">${placa.audio ? 'Cambiar audio…' : 'Elegir audio…'}</button>
+          ${placa.audio ? '<button type="button" class="archivo" data-voz-escuchar>▶ Escuchar con las barras</button>' : ''}
+          <input type="file" accept="audio/*,video/*,.opus,.ogg,.m4a,.mp3,.wav,.aac,.webm" data-voz-audio>
+          <p class="nota" id="estado_audio">${placa.audio
+            ? `${nombre}${nombre ? ' · ' : ''}${enMinutos(placa.audio_dura || 0)}` : ''}</p>
+          <p class="nota">
+            Un audio de WhatsApp, una grabación o un video, del que se usa solo
+            el sonido. De 3 segundos a 15 minutos. Las barras se mueven con la
+            voz de verdad, y se arma el video al publicar.
+          </p>
+        </div>
+      </div>`);
+  }
   for(const [campo] of slots){
     const img = await cargarImagen(placa[campo]);
     const destino = document.querySelector(`.foto[data-campo="${campo}"] img`);
@@ -1226,6 +1302,10 @@ async function pintarFotos(){
   }
   marcarSeleccion();
 }
+
+document.addEventListener('click', (ev) => {
+  if(ev.target.closest('[data-voz-escuchar]')) escucharVoz();
+});
 
 async function pintarLaminas(){
   const laminas = placa.laminas || [];
@@ -1237,7 +1317,7 @@ async function pintarLaminas(){
         <button type="button" class="archivo"
                 onclick="this.parentNode.querySelector('input').click()">Cambiar…</button>
         <button type="button" class="archivo" data-quitar="${i}">Quitar</button>
-        <input type="file" accept="image/*,video/mp4,video/quicktime" data-lamina-foto="${i}">
+        <input type="file" accept="image/*,video/*" data-lamina-foto="${i}">
         <div class="ajuste">${AJUSTES.map(([id, n, ayuda]) =>
           `<button data-lamina-ajuste="${i}:${id}" title="${ayuda}">${n}</button>`).join('')}</div>
         <div class="encuadre">
@@ -1310,24 +1390,25 @@ async function cargar(id){
   if(videoLocal){ URL.revokeObjectURL(videoLocal); videoLocal = null; }
   subiendoVideo = null;
   ultimoQuemado = null;
+  detenerVoz();
+  ultimaVoz = null;
 
   placa = await leerPlaca(id);
   localStorage.setItem('placa', id);
   document.body.dataset.formato = placa.formato;
-  const esReel = placa.formato === 'reel';
-  // en un reel no hay imágenes que bajar, hay un video
-  $('#bajar_reel').hidden = !esReel;
-  $('#bajar_carrusel').hidden = esReel;
-  document.querySelectorAll('[data-exportar]').forEach((b) => { b.hidden = esReel; });
+  // en un reel o una placa con voz no hay imágenes que bajar, hay un video
+  const esVideo = ['reel', 'voz'].includes(placa.formato);
+  $('#bajar_reel').hidden = !esVideo;
+  $('#bajar_carrusel').hidden = esVideo;
+  document.querySelectorAll('[data-exportar]').forEach((b) => { b.hidden = esVideo; });
   const urgente = placa.formato === 'urgente';
-  $('#leg_titular').textContent = urgente ? 'Descripción' : 'Titular';
+  $('#leg_titular').textContent = urgente ? 'Urgente' : 'Titular';
   $('#lab_titulo').textContent = urgente
-    ? 'Lo único editable: se estira sola hasta llenar el ancho'
+    ? 'La palabra grande: se estira sola hasta llenar el ancho'
     : 'Un salto de línea = una línea en la placa';
   await volcarControles();
   irA(localStorage.getItem('seccion') || 'titular');
   pintarBarra();
-  pintarBitacora();
   await pintarSelector();
   $('#portada').hidden = true;
   repintar();
@@ -1392,11 +1473,17 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
-$('#agregar_lamina').addEventListener('click', async () => {
-  placa.laminas = (placa.laminas || []).concat(
-    { foto: 'assets/marcador.jpg', ajuste: 'completa', x: 50, y: 50 });
-  cambio('laminas', placa.laminas);
-  await pintarLaminas();
+/* El botón abre el selector de archivos directo, con fotos y videos y
+   varios a la vez. Antes agregaba un casillero vacío con una foto de
+   muestra, que después había que cambiar: el botón decía «Agregar foto», y
+   en el teléfono —donde no se puede soltar un archivo arrastrándolo— no
+   había forma de adivinar que un video también entraba. */
+$('#agregar_lamina').addEventListener('click', () => $('#archivos_carrusel').click());
+$('#archivos_carrusel').addEventListener('change', async (ev) => {
+  const archivos = [...(ev.target.files || [])];
+  ev.target.value = '';
+  try{ await agregarAlCarrusel(archivos); }
+  catch(e){ estado(e.message, true); }
 });
 
 document.addEventListener('click', async (ev) => {
@@ -1468,6 +1555,206 @@ $('#compartir').addEventListener('click', async (ev) => {
   finally{ ev.target.disabled = false; }
 });
 
+/* ------------------------------------------------------------------ */
+/* en qué redes se publica                                             */
+/* ------------------------------------------------------------------ */
+
+const NOMBRE_RED = { instagram: 'Instagram', facebook: 'Facebook', tiktok: 'TikTok' };
+// Instagram siempre: es la cuenta con la que arranca todo. Las otras, según el servidor
+const conectadas = { instagram: true, facebook: false, tiktok: false };
+
+/* «Instagram», «Instagram y Facebook», «Instagram, Facebook y TikTok». */
+function enRedes(redes){
+  const n = redes.map((r) => NOMBRE_RED[r] || r);
+  return n.length > 1 ? n.slice(0, -1).join(', ') + ' y ' + n.at(-1) : (n[0] || '');
+}
+
+function redesElegidas(){
+  return [...document.querySelectorAll('#redes input:checked:not(:disabled)')].map((i) => i.value);
+}
+
+function pintarRedes(){
+  for(const input of document.querySelectorAll('#redes input')){
+    const red = input.value;
+    input.disabled = !conectadas[red];
+    if(!conectadas[red]) input.checked = false;
+    const nota = input.parentElement.querySelector('small');
+    if(nota && red !== 'instagram') nota.textContent = conectadas[red] ? '' : 'sin conectar';
+    input.parentElement.title = conectadas[red] ? '' : 'Se conecta desde el panel privado';
+  }
+  const elegidas = redesElegidas();
+  $('#publicar span').textContent = elegidas.length
+    ? 'Publicar en ' + enRedes(elegidas) : 'Elegí dónde publicar';
+}
+
+/* Qué hay conectado, y lo que se eligió la última vez en este navegador.
+   La primera vez van marcadas todas las conectadas: un clic y sale en todas. */
+async function cargarRedes(){
+  try{
+    const d = await api('api/redes.php');
+    conectadas.facebook = !!d.facebook?.conectado;
+    conectadas.tiktok = !!d.tiktok?.conectado;
+  }catch(e){ /* sin respuesta queda solo Instagram, como antes */ }
+  /* Se guarda qué se eligió y qué redes había en ese momento: una red que
+     se conecta después arranca marcada, así sale en todas sin tocar nada. */
+  let guardadas = null;
+  try{ guardadas = JSON.parse(localStorage.getItem('redes_publicar') || 'null'); }catch(e){}
+  if(Array.isArray(guardadas)) guardadas = { elegidas: guardadas, conocidas: ['instagram', 'facebook'] };
+  for(const input of document.querySelectorAll('#redes input')){
+    const red = input.value;
+    input.checked = conectadas[red]
+      && (!guardadas || guardadas.elegidas.includes(red) || !guardadas.conocidas?.includes(red));
+  }
+  // si lo guardado quedó sin nada que valga (desconectaron Facebook), Instagram
+  if(!redesElegidas().length) $('#redes input[value="instagram"]').checked = true;
+  pintarRedes();
+}
+
+$('#redes').addEventListener('change', () => {
+  const conocidas = Object.keys(conectadas).filter((r) => conectadas[r]);
+  try{ localStorage.setItem('redes_publicar', JSON.stringify({ elegidas: redesElegidas(), conocidas })); }catch(e){}
+  pintarRedes();
+});
+
+/* ------------------------------------------------------------------ */
+/* el paso de TikTok                                                   */
+/* ------------------------------------------------------------------ */
+
+/* TikTok exige, para publicar con su API, que quien publica vea a qué
+   cuenta va, elija la privacidad (sin nada elegido de antemano), prenda a
+   mano lo que se permite, y declare si es contenido comercial. Devuelve lo
+   que se eligió, o null si se canceló. */
+const QUIEN_VE = {
+  PUBLIC_TO_EVERYONE: 'Todos', FOLLOWER_OF_CREATOR: 'Seguidores',
+  MUTUAL_FOLLOW_FRIENDS: 'Amigos (se siguen mutuamente)', SELF_ONLY: 'Solo yo',
+};
+const MUSICA = 'https://www.tiktok.com/legal/page/global/music-usage-confirmation/en';
+const POLITICA_MARCA = 'https://www.tiktok.com/legal/page/global/bc-policy/en';
+
+function pasoTiktok(redes, { programar = false } = {}){
+  const dlg = $('#paso_tiktok');
+  const esVideo = ['reel', 'voz'].includes(placa.formato);
+  const hayVideo = esVideo || (placa.laminas || []).some((l) => l.tipo === 'video');
+  const hayFotos = !esVideo;
+  const duracion = placa.formato === 'reel' ? $('#previa_video').duration
+    : placa.formato === 'voz' ? placa.audio_dura : 0;
+
+  // todo vuelve a como TikTok lo pide: nada elegido ni prendido
+  for(const id of ['tt_comentarios', 'tt_duo', 'tt_stitch', 'tt_musica', 'tt_comercial', 'tt_marca_propia', 'tt_marca_pagada']){
+    $('#' + id).checked = false;
+    $('#' + id).disabled = false;
+  }
+  document.querySelectorAll('[data-tt-video]').forEach((el) => { el.hidden = !hayVideo; });
+  document.querySelectorAll('[data-tt-fotos]').forEach((el) => { el.hidden = !hayFotos; });
+  $('#tt_comercial_opciones').hidden = true;
+  $('#tt_cuerpo').hidden = true;
+  $('#tt_declaracion').hidden = true;
+  $('#tt_demora').hidden = true;
+  $('#tt_error').hidden = true;
+  $('#tt_foto').hidden = true;
+  $('#tt_cuenta').textContent = 'Consultando la cuenta de TikTok…';
+  $('#tt_texto').value = armarCaption();
+  const otras = redes.filter((r) => r !== 'tiktok');
+  $('#tt_otras').hidden = !otras.length;
+  $('#tt_otras').textContent = otras.length ? `Al mismo tiempo sale en ${enRedes(otras)}, como siempre.` : '';
+  $('#tt_publicar').textContent = programar ? 'Programar' : 'Publicar';
+  $('#tt_publicar').disabled = true;
+
+  // la vista previa: el video del reel debajo y lo dibujado encima, como en el editor
+  const lienzo = $('#tt_previa');
+  const origen = $('#previa');
+  lienzo.width = origen.width;
+  lienzo.height = origen.height;
+  const ctx = lienzo.getContext('2d');
+  const video = $('#previa_video');
+  if(!video.hidden && video.readyState >= 2) ctx.drawImage(video, 0, 0, lienzo.width, lienzo.height);
+  ctx.drawImage(origen, 0, 0);
+
+  let creador = null;
+  const marcaPagada = () => $('#tt_marca_pagada').checked;
+
+  function revisar(){
+    const comercial = $('#tt_comercial').checked;
+    $('#tt_comercial_opciones').hidden = !comercial;
+    if(!comercial){ $('#tt_marca_propia').checked = false; $('#tt_marca_pagada').checked = false; }
+    const propia = $('#tt_marca_propia').checked, pagada = marcaPagada();
+    const pieza = hayVideo && !hayFotos ? 'Tu video' : hayVideo ? 'Tu publicación' : 'Tu foto';
+    $('#tt_etiqueta').hidden = !(propia || pagada);
+    $('#tt_etiqueta').textContent = pagada ? `${pieza} va a llevar la etiqueta «Colaboración pagada».`
+      : `${pieza} va a llevar la etiqueta «Contenido promocional».`;
+
+    // el contenido de marca no puede ser privado
+    const privado = $('#tt_quien').querySelector('option[value="SELF_ONLY"]');
+    if(privado){
+      privado.disabled = pagada;
+      privado.title = pagada ? 'El contenido de marca no puede ser privado.' : '';
+      if(pagada && $('#tt_quien').value === 'SELF_ONLY'){
+        $('#tt_quien').value = '';
+        $('#tt_etiqueta').textContent += ' El contenido de marca no puede ser privado: elegí quién puede verlo.';
+      }
+    }
+
+    $('#tt_declaracion').innerHTML = pagada
+      ? `Al publicar, aceptás la <a href="${POLITICA_MARCA}" target="_blank" rel="noopener">Política de contenido de marca</a> y la <a href="${MUSICA}" target="_blank" rel="noopener">Confirmación de uso de música</a> de TikTok.`
+      : `Al publicar, aceptás la <a href="${MUSICA}" target="_blank" rel="noopener">Confirmación de uso de música</a> de TikTok.`;
+
+    let motivo = '';
+    if(!creador) motivo = 'Esperá a que TikTok conteste.';
+    else if(hayVideo && creador.maxSegundos && duracion > creador.maxSegundos){
+      motivo = `El video dura ${Math.round(duracion)} s y esta cuenta de TikTok acepta hasta ${creador.maxSegundos} s.`;
+    }else if(!$('#tt_quien').value) motivo = 'Elegí quién puede verlo.';
+    else if(comercial && !propia && !pagada){
+      motivo = 'Tenés que indicar si el contenido promociona tu marca, a un tercero, o a los dos.';
+    }
+    $('#tt_publicar').disabled = !!motivo;
+    $('#tt_publicar_caja').title = motivo;
+  }
+
+  return new Promise((resolver) => {
+    const cerrar = (valor) => {
+      dlg.removeEventListener('change', revisar);
+      dlg.close();
+      resolver(valor);
+    };
+    dlg.addEventListener('change', revisar);
+    $('#tt_cancelar').onclick = () => cerrar(null);
+    dlg.oncancel = (e) => { e.preventDefault(); cerrar(null); };
+    $('#tt_publicar').onclick = () => {
+      if($('#tt_publicar').disabled) return;
+      cerrar({
+        privacidad: $('#tt_quien').value, texto: $('#tt_texto').value,
+        comentarios: $('#tt_comentarios').checked, duo: $('#tt_duo').checked,
+        stitch: $('#tt_stitch').checked, musica: $('#tt_musica').checked,
+        marca_propia: $('#tt_marca_propia').checked, marca_pagada: marcaPagada(),
+      });
+    };
+    dlg.showModal();
+
+    // la cuenta, pedida a TikTok cada vez que se abre: puede haber cambiado
+    api('api/redes.php?creador=tiktok').then((c) => {
+      creador = c;
+      $('#tt_cuenta').textContent = `Va a la cuenta ${c.nombre || ''} (@${c.usuario})`;
+      if(c.foto){ $('#tt_foto').src = c.foto; $('#tt_foto').hidden = false; }
+      $('#tt_quien').innerHTML = '<option value="" selected disabled>Elegí quién puede verlo</option>'
+        + c.opciones.map((o) => `<option value="${esc(o)}">${esc(QUIEN_VE[o] || o)}</option>`).join('');
+      // lo que la cuenta tiene apagado en TikTok, acá también
+      for(const [id, apagado] of [['tt_comentarios', c.sinComentarios], ['tt_duo', c.sinDuo], ['tt_stitch', c.sinStitch]]){
+        $('#' + id).disabled = !!apagado;
+        $('#' + id).closest('label').title = apagado ? 'Está apagado en la configuración de la cuenta de TikTok' : '';
+      }
+      $('#tt_cuerpo').hidden = false;
+      $('#tt_declaracion').hidden = false;
+      $('#tt_demora').hidden = false;
+      revisar();
+    }).catch((e) => {
+      // si TikTok dice que ahora no se puede publicar, se para acá
+      $('#tt_cuenta').textContent = 'TikTok no contestó';
+      $('#tt_error').hidden = false;
+      $('#tt_error').textContent = e.message + ' Probá de nuevo en un rato, o sacá TikTok de las redes.';
+    });
+  });
+}
+
 $('#publicar').addEventListener('click', async (ev) => {
   // sin descripción no se publica: un post vacío no se puede editar después
   // sin borrarlo y volver a subirlo
@@ -1499,8 +1786,18 @@ $('#publicar').addEventListener('click', async (ev) => {
       + `hace ${hace} segundos: «${o.que}». Publicar dos cosas a la vez las hace `
       + 'chocar. ¿Seguimos igual?')) return;
   }
+  const redes = redesElegidas();
+  if(!redes.length) return estado('Elegí al menos una red, arriba de Publicar.', true);
   const laminas = (placa.laminas || []).length + 1;
-  if(!confirm(`Se va a publicar en Instagram un carrusel de ${laminas} imagen${laminas > 1 ? 'es' : ''}. ¿Seguimos?`)) return;
+  // el reel y la placa con voz son un video solo, no un carrusel
+  const queSale = ['reel', 'voz'].includes(placa.formato) ? 'un video'
+    : `un carrusel de ${laminas} imagen${laminas > 1 ? 'es' : ''}`;
+  // con TikTok, su paso hace de confirmación; sin TikTok, la pregunta de siempre
+  let tiktok = null;
+  if(redes.includes('tiktok')){
+    tiktok = await pasoTiktok(redes);
+    if(!tiktok) return;
+  }else if(!confirm(`Se va a publicar en ${enRedes(redes)} ${queSale}. ¿Seguimos?`)) return;
   ev.target.disabled = true;
   // publicar puede llevar minutos; si la pantalla se apaga, se corta todo
   const despierto = await mantenerDespierto();
@@ -1515,6 +1812,8 @@ $('#publicar').addEventListener('click', async (ev) => {
     let items;
     if(placa.formato === 'reel'){
       items = [await reelParaPublicar()];
+    }else if(placa.formato === 'voz'){
+      items = [await vozParaPublicar()];
     }else{
       trabajo('Generando las imágenes', 0);
       items = await itemsParaPublicar((a) => trabajo('Generando las imágenes', a));
@@ -1523,8 +1822,8 @@ $('#publicar').addEventListener('click', async (ev) => {
     anotar('publicando', { piezas: items.length,
       tipos: items.map((x) => x.tipo).join(', ') });
     const arranquePublicar = Date.now();
-    trabajo('Publicando en Instagram', null,
-      'Instagram tiene que recibir y procesar cada pieza. Con video puede tardar unos minutos. No cierres esta ventana.');
+    trabajo('Publicando en ' + enRedes(redes), null,
+      'Cada red tiene que recibir y procesar cada pieza. Con video puede tardar unos minutos. No cierres esta ventana.');
     const res = await fetch('api/publicar.php', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1533,16 +1832,29 @@ $('#publicar').addEventListener('click', async (ev) => {
         caption: armarCaption(),
         colaboradores: placa.colaboradores || '',
         etiquetados: placa.etiquetados || '',
+        redes, tiktok,
+        // para el historial del equipo: qué fue. Quién, lo sabe el servidor
+        placa: { placa_id: placa.id, nombre: placa.nombre, formato: placa.formato },
       }),
     });
     const datos = await res.json().catch(() => ({}));
     if(!res.ok){
       if(res.status === 401) localStorage.removeItem('clave_publicar');
-      throw new Error(datos.error || `Error ${res.status}`);
+      /* Sin datos y con 5xx, el hosting dejó de esperar pero el servidor
+         puede haber seguido: publicar de nuevo a ciegas la duplicaría. */
+      if(!datos.error && res.status >= 500){
+        throw new Error(`El hosting cortó la espera (error ${res.status}) mientras se publicaba. `
+          + 'Puede que haya salido igual: revisá las redes antes de volver a publicar.');
+      }
+      throw new Error(datos.error || motivoHttp(res.status));
     }
     anotar('publicado', { tardo: seg(Date.now() - arranquePublicar),
       aviso: datos.aviso ? String(datos.aviso).slice(0, 80) : 'sin avisos' });
-    estado('Publicado' + (datos.aviso ? ' — ' + datos.aviso : ''));
+    // dónde salió de verdad: si una red falló, las otras igual salieron
+    const salio = Object.entries(datos.redes || { instagram: datos })
+      .filter(([, r]) => r.ok).map(([red]) => red);
+    estado('Publicado en ' + enRedes(salio) + (datos.aviso ? ' — ' + datos.aviso : ''),
+      salio.length < redes.length);
     if(datos.enlace) window.open(datos.enlace, '_blank');
   }catch(e){ estado(e.message, true); }
   finally{
@@ -1560,6 +1872,7 @@ $('#publicar').addEventListener('click', async (ev) => {
    llegue la hora no va a haber ningún navegador que las dibuje. */
 async function cargaParaProgramar(){
   if(placa.formato === 'reel') return { items: [await reelParaPublicar()] };
+  if(placa.formato === 'voz') return { items: [await vozParaPublicar()] };
   trabajo('Generando las imágenes', 0);
   const listos = await itemsParaPublicar((a) => trabajo('Generando las imágenes', a));
   const items = [];
@@ -1590,7 +1903,8 @@ async function pintarCola(){
       <li class="${esc(p.estado)}">
         <b>${esc(new Date(p.publicar_en).toLocaleString('es-CL',
               { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }))}</b>
-        <span>${esc(p.nombre)} · ${esc(p.estado)}</span>
+        <span>${esc(String(p.nombre || '').replace(/\*/g, ''))}</span>
+        <em>${esc(p.estado)}</em>
         ${p.estado === 'pendiente'
           ? `<button class="descarga quitar" data-quitar-cola="${p.id}">Cancelar</button>` : ''}
       </li>`).join('') || '<li class="pendiente">Nada programado.</li>');
@@ -1621,6 +1935,13 @@ $('#programar').addEventListener('click', async (ev) => {
       + `hace ${hace} segundos: «${o.que}». Publicar dos cosas a la vez las hace `
       + 'chocar. ¿Seguimos igual?')) return;
   }
+  const redes = redesElegidas();
+  if(!redes.length) return estado('Elegí al menos una red, arriba de Publicar.', true);
+  let tiktok = null;
+  if(redes.includes('tiktok')){
+    tiktok = await pasoTiktok(redes, { programar: true });
+    if(!tiktok) return;
+  }
   ev.target.disabled = true;
   const despierto = await mantenerDespierto();
   abrirTrabajo();
@@ -1633,15 +1954,15 @@ $('#programar').addEventListener('click', async (ev) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        clave: clave(), placa_id: placa.id, nombre: placa.nombre,
+        clave: clave(), placa_id: placa.id, nombre: placa.nombre, formato: placa.formato,
         // se manda el instante absoluto: el servidor puede estar en otra zona
         publicar_en: new Date(cuando).toISOString(),
         carga: { ...carga, caption: armarCaption(),
                  colaboradores: placa.colaboradores || '',
-                 etiquetados: placa.etiquetados || '' },
+                 etiquetados: placa.etiquetados || '', redes, tiktok },
       }),
     });
-    estado('Programado');
+    estado('Programado para ' + enRedes(redes));
     await pintarCola();
   }catch(e){ estado(e.message, true); }
   finally{
@@ -1718,7 +2039,11 @@ $('#bajar_reel').addEventListener('click', async (ev) => {
   abrirTrabajo();
   congelar(true);   // el titular se le quema encima con lo que hay ahora
   try{
-    if(!placa.reel_crudo && placa.video){
+    if(placa.formato === 'voz'){
+      // el mismo que se va a publicar: si ya está armado, sale al instante
+      const { blob } = await grabarVozDePlaca();
+      bajar(blob, baseNombre() + '.mp4');
+    }else if(!placa.reel_crudo && placa.video){
       // los de antes ya están hechos: se bajan del servidor y listo
       const r = await fetch(placa.video);
       bajar(await r.blob(), baseNombre() + '.mp4');
@@ -1775,6 +2100,8 @@ document.addEventListener('change', async (ev) => {
   try{
     if(el.dataset.reelVideo !== undefined){
       await agregarReel(archivo);
+    }else if(el.dataset.vozAudio !== undefined){
+      await agregarAudioVoz(archivo);
     }else if(el.dataset.laminaFoto !== undefined){
       await reemplazarLamina(Number(el.dataset.laminaFoto), archivo);
       estado('Foto del carrusel actualizada');
@@ -1819,6 +2146,29 @@ async function mantenerDespierto(){
   catch(e){ return null; }   // no todos los navegadores lo tienen
 }
 
+/* La pantalla encendida mientras sube un archivo.
+   Grabar y publicar ya lo hacían, pero guardar el video recién elegido no,
+   y es justo la subida más larga: el video entero, tal cual salió del
+   teléfono. Encima el editor invita a seguir trabajando mientras tanto, y a
+   los pocos segundos sin tocar la pantalla el teléfono se bloquea; con la
+   pantalla apagada el navegador suspende la pestaña y la subida queda
+   congelada en el porcentaje en que estaba.
+   El sistema suelta el bloqueo cada vez que uno se va a otra app —a
+   WhatsApp a copiar el titular, por ejemplo—, así que se vuelve a pedir al
+   regresar, mientras la subida siga en curso. */
+async function despiertoMientras(promesa){
+  let bloqueo = await mantenerDespierto();
+  const alVolver = async () => {
+    if(!document.hidden && (!bloqueo || bloqueo.released)) bloqueo = await mantenerDespierto();
+  };
+  document.addEventListener('visibilitychange', alVolver);
+  try{ return await promesa; }
+  finally{
+    document.removeEventListener('visibilitychange', alVolver);
+    bloqueo?.release().catch(() => {});
+  }
+}
+
 /* Cuántos bits por segundo lleva el video grabado. Manda el tamaño del
    archivo y, con eso, lo que tarda en subir; no cambia lo que tarda la
    grabación, que va contra el reloj.
@@ -1827,7 +2177,14 @@ async function mantenerDespierto(){
    pérdida casi no se ve y se sube un tercio menos. */
 /* Declaradas como función y no como constante a propósito: se usan más
    arriba, al pintar el control, y una constante todavía no existiría. */
-function calidadVideo(){ return localStorage.getItem('calidad_video') || 'alta'; }
+/* La calidad, el camino y la marca del video se elegían en «Más». Se
+   sacaron del panel y quedan fijos en lo que ya se usaba: calidad alta,
+   camino rápido y sin nada encima. Lo guardado de antes en este navegador
+   se borra al arrancar, para que nadie quede atado a una elección que ya no
+   puede cambiar. */
+for(const k of ['calidad_video', 'codecs_rapido', 'marca_en_video_2']) localStorage.removeItem(k);
+
+function calidadVideo(){ return 'alta'; }
 
 /* Si los videos del carrusel llevan el logo y el degradado quemados encima.
    Viene apagado. Dibujarles algo obliga a recomprimirlos enteros, y de ahí
@@ -1841,7 +2198,7 @@ function calidadVideo(){ return localStorage.getItem('calidad_video') || 'alta';
    valor por omisión: seguía quemando la marca aunque el editor viniera
    configurado para no hacerlo. Con un nombre nuevo, lo guardado antes deja de
    contar y todos arrancan sin marca; el que la quiera la vuelve a encender. */
-function marcaEnVideo(){ return localStorage.getItem('marca_en_video_2') === '1'; }
+function marcaEnVideo(){ return false; }
 function tasaDeVideo(){
   return calidadVideo() === 'rapida'
     ? 2_500_000
@@ -1890,9 +2247,7 @@ function tasaDeSalida(ancho, alto){
    Va encendido salvo que se lo apague a mano, y si el navegador no lo tiene
    —o si algo falla en el medio— se graba a la antigua sin que nadie se entere.
    Guardar un '0' es la salida de emergencia si aparece un video que lo rompa. */
-const hayCodecs = () =>
-  localStorage.getItem('codecs_rapido') !== '0' &&
-  typeof VideoEncoder === 'function' && typeof VideoDecoder === 'function';
+const hayCodecs = () => typeof VideoEncoder === 'function' && typeof VideoDecoder === 'function';
 
 async function quemarConCodecs(fuente, pintar, avisar, ancho, alto){
   const buffer = typeof fuente === 'string'
@@ -1900,12 +2255,9 @@ async function quemarConCodecs(fuente, pintar, avisar, ancho, alto){
     : await fuente.arrayBuffer();
 
   const { video, audio } = leerMp4(buffer);
-  /* Sin muestras en las tablas, casi siempre es un MP4 fragmentado: los que
-     salen del grabador del navegador y de varias apps de edición guardan los
-     cuadros en cajas `moof` sueltas en vez de en el índice del principio.
-     Este lector solo entiende el índice clásico. Se dice cuál es el caso para
-     que no parezca un archivo roto, y quien llama se pasa al camino lento,
-     que reproduce el video y no necesita leer nada. */
+  /* Sin muestras, el archivo tiene una forma que el lector no conoce. Se
+     dice cuál es el caso para que no parezca un archivo roto, y quien llama
+     se pasa al camino lento, que reproduce el video y no necesita leerlo. */
   if(!video || !video.muestras.length){
     const fragmentado = new TextDecoder('latin1')
       .decode(new Uint8Array(buffer.slice(0, Math.min(buffer.byteLength, 4096))))
@@ -1914,7 +2266,21 @@ async function quemarConCodecs(fuente, pintar, avisar, ancho, alto){
       ? 'el video viene fragmentado y este camino no lo puede leer'
       : 'no se pudo leer el índice del video');
   }
-  if(!video.descripcion) throw new Error('el video no viene en H.264');
+  if(!video.descripcion) throw new Error('el video no viene ni en H.264 ni en HEVC');
+
+  /* Se pregunta antes si este aparato sabe decodificarlo. HEVC —lo que
+     graba el iPhone de fábrica— no lo decodifica cualquier navegador: Safari
+     y Chrome en Mac sí, Chrome en Windows depende de la placa de video. Sin
+     preguntar, fallaba a mitad de camino con un error que no decía nada. */
+  const configDec = {
+    codec: video.codec, description: video.descripcion,
+    codedWidth: video.ancho, codedHeight: video.alto,
+  };
+  const { supported } = await VideoDecoder.isConfigSupported(configDec).catch(() => ({}));
+  if(!supported){
+    throw new Error(`este navegador no decodifica ${/^(hvc1|hev1)/.test(video.codec) ? 'HEVC' : video.codec}`
+      + ' por el camino rápido');
+  }
 
   /* Un lienzo normal y no uno fuera de pantalla: el de fuera de pantalla no
      siempre trae todo lo del dibujo —el espaciado entre letras, por ejemplo—
@@ -1988,8 +2354,11 @@ async function quemarConCodecs(fuente, pintar, avisar, ancho, alto){
     // una clave cada dos segundos, para que se pueda saltar dentro del video
     enc.encode(salida, { keyFrame: emitidos % (ritmoOrigen * 2) === 0 });
     salida.close();
-    siguiente += PASO;
     emitidos++;
+    /* El casillero siguiente se calcula desde cero y no sumando PASO: PASO
+       está redondeado —33.333 µs en vez de 33.333,33—, y al sumarlo la
+       rejilla se iba atrasando respecto de los cuadros. */
+    siguiente = Math.round(emitidos * 1e6 / ritmoOrigen);
   };
 
   const total = video.muestras.length;
@@ -1999,7 +2368,13 @@ async function quemarConCodecs(fuente, pintar, avisar, ancho, alto){
       if(cerrado){ cuadro.close(); return; }
       try{
         // los instantes que este cuadro deja atrás se llenan con lo anterior
-        while(hayDibujo && siguiente < cuadro.timestamp) emitir();
+        /* Cada cuadro va al casillero más cercano a su hora. Antes iba al
+           primero que le quedaba atrás: con la hora apenas corrida por el
+           redondeo —un microsegundo— el casillero se llenaba con el cuadro
+           anterior, que salía repetido, y todo el video quedaba corrido uno.
+           Medido con una pelota que cruza la pantalla: se quedaba quieta un
+           cuadro al principio. */
+        while(hayDibujo && siguiente + PASO / 2 <= cuadro.timestamp) emitir();
         pintar(ctx, cuadro, siguiente / 1e6);
         hayDibujo = true;
       }finally{
@@ -2010,10 +2385,7 @@ async function quemarConCodecs(fuente, pintar, avisar, ancho, alto){
     },
     error: (e) => { falla = e; },
   });
-  dec.configure({
-    codec: video.codec, description: video.descripcion,
-    codedWidth: video.ancho, codedHeight: video.alto,
-  });
+  dec.configure(configDec);
 
   const cerrarTodo = () => {
     cerrado = true;
@@ -2058,7 +2430,8 @@ async function quemarConCodecs(fuente, pintar, avisar, ancho, alto){
   /* Lo que quedó dibujado cubre hasta el final del original: se emiten los
      instantes que faltan para no cortar el video antes de tiempo. */
   const duracionOrigen = video.muestras.reduce((a, m) => a + m.duracion, 0) / video.reloj * 1e6;
-  while(hayDibujo && siguiente < duracionOrigen) emitir();
+  // con la misma tolerancia: si no, el redondeo agregaba un cuadro de más al final
+  while(hayDibujo && siguiente + PASO / 2 <= duracionOrigen) emitir();
   if(!emitidos && hayDibujo) emitir();       // un original de un solo cuadro
   await enc.flush(); enc.close();
   cerrado = true;
@@ -2356,7 +2729,7 @@ async function quemarReel(fuente, avisar){
     if(!dibujando) return;
     vigia.latido();
     dibujarReel(ctx, placa, video, logo, REEL.ancho, REEL.alto,
-      Math.min(1, video.currentTime / ANIMACION));
+      Math.min(1, video.currentTime / ANIMACION), false, firma);
     cuadros++;
     if(video.duration) avisar?.(video.currentTime / video.duration);
     setTimeout(pintar, 33);
@@ -2373,7 +2746,7 @@ async function quemarReel(fuente, avisar){
     video.onloadeddata = r;
     setTimeout(r, 1500);
   });
-  dibujarReel(ctx, placa, video, logo, REEL.ancho, REEL.alto, 0);
+  dibujarReel(ctx, placa, video, logo, REEL.ancho, REEL.alto, 0, false, firma);
 
   const listo = new Promise((r) => { grabador.onstop = r; });
   const despierto = await mantenerDespierto();
@@ -2411,7 +2784,7 @@ async function quemarReel(fuente, avisar){
   // portada: un cuadro con el titular ya entrado
   video.currentTime = Math.min(2, video.duration / 2);
   await new Promise((r) => { video.onseeked = r; setTimeout(r, 600); });
-  dibujarReel(ctx, placa, video, logo, REEL.ancho, REEL.alto, 1);
+  dibujarReel(ctx, placa, video, logo, REEL.ancho, REEL.alto, 1, false, firma);
   const portada = await new Promise((r) => lienzo.toBlob(r, 'image/jpeg', 0.9));
 
   if(propia) URL.revokeObjectURL(video.src);
@@ -2475,9 +2848,10 @@ async function agregarReel(archivo){
 
   // si mientras sube se cambia de placa, lo subido es de la otra: no se toca
   const suPlaca = placa;
-  subiendoVideo = guardarFoto(archivo, (a) => {
-    decir(`Guardando el video… ${Math.round(a * 100)}%. Podés ir escribiendo el titular.`);
-  })
+  subiendoVideo = despiertoMientras(guardarFoto(archivo, (a, nota) => {
+    decir(`Guardando el video… ${Math.round(a * 100)}%. `
+      + (nota || 'Podés ir escribiendo el titular.'));
+  }))
     .then(({ ruta }) => {
       if(placa !== suPlaca) return ruta;
       cambio('video', ruta);
@@ -2583,7 +2957,7 @@ async function grabarReel(){
       video = await quemarConCodecs(fuente,
         (ctx, cuadro, segundos) => {
           dibujarReel(ctx, placa, cuadro, logo, REEL.ancho, REEL.alto,
-            Math.min(1, segundos / ANIMACION));
+            Math.min(1, segundos / ANIMACION), false, firma);
         },
         (a) => trabajo(rotulo, a, espera),
         REEL.ancho, REEL.alto);
@@ -2609,7 +2983,7 @@ async function grabarReel(){
 
   trabajo('Subiendo el reel', 0, 'Ya está grabado: falta que llegue al servidor.');
   const sub = await guardarFoto(new File([video], 'reel.mp4', { type: 'video/mp4' }),
-    (a) => trabajo('Subiendo el reel', a, 'Ya está grabado: falta que llegue al servidor.'));
+    (a, nota) => trabajo('Subiendo el reel', a, nota || 'Ya está grabado: falta que llegue al servidor.'));
   ultimoQuemado = { firma, ruta: sub.ruta, blob: video, portadaEn };
   return ultimoQuemado;
 }
@@ -2620,6 +2994,187 @@ async function reelParaPublicar(){
   if(!fuenteDelReel()) throw new Error('Falta el video del reel');
   if(!placa.reel_crudo) return { tipo: 'reel', ruta: placa.video };
   const { ruta, portadaEn } = await grabarReel();
+  return { tipo: 'reel', ruta, portadaEn };
+}
+
+/* ------------------------------------------------------------------ */
+/* placa con voz                                                       */
+/* ------------------------------------------------------------------ */
+
+/* El audio ya leído y medido, para no repetirlo cada vez que se dibuja:
+   medir quince minutos de voz lleva unos segundos. Va atado a la placa y
+   al archivo que se midió; `ruta` es null mientras recién se eligió y
+   todavía está subiendo. */
+let vozMedida = null;      // { placaId, ruta, audio, medida, local }
+let midiendoVoz = null;    // la medición en curso, para no arrancar dos
+let ultimaVoz = null;      // el video ya armado: { firma, ruta, blob, portadaEn }
+let reproduccion = null;   // la vista previa sonando: { sonido, cuadro }
+
+const DURACION_VOZ_MIN = 3;     // Instagram no acepta reels más cortos
+const DURACION_VOZ_MAX = 900;   // ni más largos que 15 minutos
+
+/* Todo lo que cambia el video. Si nada de esto cambió desde la última vez,
+   publicar usa el que ya está armado y subido, en vez de armarlo de nuevo. */
+const CAMPOS_VOZ = ['audio', 'titulo', 'etiqueta', 'color_fondo', 'color_filete', 'diseno',
+  'foto_izq', 'foto_izq_x', 'foto_izq_y', 'foto_izq_ajuste',
+  'foto_der', 'foto_der_x', 'foto_der_y', 'foto_der_ajuste',
+  'foto_cen', 'foto_cen_x', 'foto_cen_y', 'foto_cen_ajuste', 'circulo_x', 'circulo_y'];
+
+function vozEnMemoria(){
+  const v = vozMedida;
+  if(!v || !placa || v.placaId !== placa.id) return null;
+  return (v.ruta === null || v.ruta === placa.audio) ? v : null;
+}
+
+/* Lee y mide el audio de la placa. Si se acaba de elegir ya está en
+   memoria; si la placa se abrió otro día o desde otro equipo, se baja del
+   servidor. */
+async function vozDePlaca(avisar){
+  const ya = vozEnMemoria();
+  if(ya) return ya;
+  if(!placa.audio) throw new Error('Falta el audio con la voz.');
+  const ruta = placa.audio, placaId = placa.id;
+  if(midiendoVoz?.ruta === ruta) return midiendoVoz.promesa;
+  const promesa = (async () => {
+    avisar?.('Bajando el audio');
+    const r = await fetch(recurso(ruta));
+    if(!r.ok) throw new Error(`No se pudo bajar el audio del servidor (${r.status}).`);
+    const audio = await leerAudio(await r.arrayBuffer());
+    avisar?.('Midiendo la voz');
+    const medida = await medirVoz(audio.pcm);
+    vozMedida = { placaId, ruta, audio, medida, local: null };
+    return vozMedida;
+  })();
+  midiendoVoz = { ruta, promesa };
+  try{ return await promesa; }
+  finally{ if(midiendoVoz?.promesa === promesa) midiendoVoz = null; }
+}
+
+/* Los niveles de la voz en el segundo `t`. */
+function vozEn(voz, t){
+  const B = VOZ.bandas;
+  const f = Math.max(0, Math.min(voz.medida.cuadros - 1, Math.floor(t * VOZ.ritmo)));
+  return [voz.medida.bandas.subarray(f * B, f * B + B), voz.medida.volumen[f]];
+}
+
+/* Se elige el audio: se lee y se mide acá mismo, así la placa se ve con
+   la voz de verdad enseguida, y se sube mientras tanto. Si el audio no se
+   puede abrir o no tiene un largo que Instagram acepte, se dice antes de
+   subir nada. */
+async function agregarAudioVoz(archivo){
+  detenerVoz();
+  const decir = (texto, mal) => {
+    const el = $('#estado_audio');
+    if(el){ el.textContent = texto; el.classList.toggle('mal', !!mal); }
+    estado(texto, mal);
+  };
+  decir('Leyendo el audio…');
+  const audio = await leerAudio(await archivo.arrayBuffer());
+  if(audio.duracion < DURACION_VOZ_MIN){
+    throw new Error(`El audio dura ${audio.duracion.toFixed(1)} s: Instagram pide al menos ${DURACION_VOZ_MIN} segundos.`);
+  }
+  if(audio.duracion > DURACION_VOZ_MAX){
+    throw new Error(`El audio dura ${enMinutos(audio.duracion)}: Instagram acepta hasta 15 minutos.`);
+  }
+  decir('Midiendo la voz…');
+  const medida = await medirVoz(audio.pcm);
+  anotar('audio elegido', { para: 'voz', peso: mb(archivo.size),
+    dura: seg(audio.duracion * 1000),
+    camino: audio.aac ? 'AAC: va tal cual, sin recomprimir' : 'se pasa a AAC al publicar' });
+
+  const suPlaca = placa;
+  if(vozMedida?.local) URL.revokeObjectURL(vozMedida.local);
+  vozMedida = { placaId: placa.id, ruta: null, audio, medida, local: URL.createObjectURL(archivo) };
+  ultimaVoz = null;
+  repintar();
+
+  const pista = 'Podés ir escribiendo el titular.';
+  decir(`Guardando el audio… 0%. ${pista}`);
+  const { ruta } = await despiertoMientras(guardarFoto(archivo,
+    (a, nota) => decir(`Guardando el audio… ${Math.round(a * 100)}%. ${nota || pista}`)));
+  if(placa !== suPlaca) return estado('El audio subió, pero ya estabas en otra noticia.', true);
+  if(vozMedida?.placaId === placa.id) vozMedida.ruta = ruta;
+  placa.audio_nombre = archivo.name;
+  placa.audio_dura = Math.round(audio.duracion * 10) / 10;
+  cambio('audio', ruta);
+  await pintarFotos();
+  decir(`Audio listo: ${enMinutos(audio.duracion)}.`);
+}
+
+function detenerVoz(){
+  if(!reproduccion) return;
+  cancelAnimationFrame(reproduccion.cuadro);
+  reproduccion.sonido.pause();
+  reproduccion = null;
+  const b = $('[data-voz-escuchar]');
+  if(b) b.textContent = '▶ Escuchar con las barras';
+}
+
+/* La vista previa con sonido: la placa se dibuja con la misma función que
+   arma el video, en el segundo que va sonando, así que lo que se ve es lo
+   que se va a publicar. */
+async function escucharVoz(){
+  if(reproduccion){ detenerVoz(); repintar(); return; }
+  try{
+    const voz = await vozDePlaca((que) => estado(que + '…'));
+    estado('');
+    const pintor = prepararVoz(placa, await imagenesDe(placa), ANCHO_FEED, voz.audio.duracion);
+    const sonido = new Audio(voz.local || recurso(placa.audio));
+    const ctx = $('#previa').getContext('2d');
+    reproduccion = { sonido, cuadro: 0 };
+    const pintar = () => {
+      if(reproduccion?.sonido !== sonido) return;
+      const t = sonido.currentTime;
+      pintor.cuadro(ctx, t, ...vozEn(voz, t));
+      reproduccion.cuadro = requestAnimationFrame(pintar);
+    };
+    sonido.onended = () => { detenerVoz(); repintar(); };
+    await sonido.play();
+    const b = $('[data-voz-escuchar]');
+    if(b) b.textContent = '■ Parar';
+    pintar();
+  }catch(e){
+    detenerVoz();
+    estado(e.message, true);
+  }
+}
+
+/* Arma el video, lo sube y lo recuerda: publicar, programar y bajar usan
+   el mismo, y mientras no cambie nada no se vuelve a armar. */
+async function grabarVozDePlaca(){
+  const firma = JSON.stringify(CAMPOS_VOZ.map((k) => placa[k]));
+  if(ultimaVoz?.firma === firma) return ultimaVoz;
+  if(!placa.audio) throw new Error('Falta el audio con la voz.');
+
+  const rotulo = 'Armando el video con la voz';
+  const pista = 'Cada cuadro se dibuja con la voz de ese instante, así sale parejo '
+    + 'aunque el aparato sea lento.';
+  trabajo(rotulo, null, 'Leyendo el audio');
+  const voz = await vozDePlaca((que) => trabajo(rotulo, null, que));
+  const pintor = prepararVoz(placa, await imagenesDe(placa), ANCHO_FEED, voz.audio.duracion);
+  const arranque = Date.now();
+  const blob = await grabarVoz({
+    pintor, medida: voz.medida, audio: voz.audio,
+    ancho: ANCHO_FEED, alto: altoDe(ANCHO_FEED),
+    bitrate: tasaDeSalida(ANCHO_FEED, altoDe(ANCHO_FEED)),
+    avisar: (a, que) => trabajo(rotulo, a, que || pista),
+    cortado: cortaron,
+  });
+  anotar('voz armada', { dura: seg(voz.audio.duracion * 1000), tardo: seg(Date.now() - arranque),
+    peso: mb(blob.size), audio: voz.audio.aac ? 'AAC tal cual' : 'convertido a AAC' });
+
+  const subiendo = 'Ya está armado: falta que llegue al servidor.';
+  trabajo('Subiendo el video', 0, subiendo);
+  const sub = await guardarFoto(new File([blob], 'voz.mp4', { type: 'video/mp4' }),
+    (a, nota) => trabajo('Subiendo el video', a, nota || subiendo));
+  ultimaVoz = { firma, ruta: sub.ruta, blob, portadaEn: pintor.portada };
+  return ultimaVoz;
+}
+
+/* Para Instagram es un reel: un video solo, en 4:5. La tapa es el momento
+   en que el titular ya terminó de entrar. */
+async function vozParaPublicar(){
+  const { ruta, portadaEn } = await grabarVozDePlaca();
   return { tipo: 'reel', ruta, portadaEn };
 }
 
@@ -2707,8 +3262,8 @@ async function agregarVideo(archivo, indice){
     }
 
     trabajo('Subiendo el video', 0, 'Se guarda tal cual, sin procesar.');
-    const subido = await guardarFoto(archivo,
-      (a) => trabajo('Subiendo el video', a, 'Se guarda tal cual, sin procesar.'));
+    const subido = await despiertoMientras(guardarFoto(archivo,
+      (a, nota) => trabajo('Subiendo el video', a, nota || 'Se guarda tal cual, sin procesar.')));
     const conPortada = await guardarFoto(new File([jpg], 'portada.jpg', { type: 'image/jpeg' }));
 
     if(placa !== suPlaca) return estado('El video subió, pero ya estabas en otra noticia.', true);
@@ -2788,6 +3343,7 @@ async function medidasDeVideo(ruta){
 }
 
 async function videoDeLamina(lam, i){
+  let rapidoNoPudo = false;   // ver más abajo: no se intenta dos veces
   /* Los videos de antes vienen ya grabados y sin el archivo original, así que
      no hay nada que volver a dibujarles. Se mandaban tal cual.
      El problema es que se grabaron cuando la placa era cuadrada, y en el
@@ -2839,7 +3395,7 @@ async function videoDeLamina(lam, i){
     }
     trabajo(rotulo, 1, 'Subiéndolo.');
     const sub = await guardarFoto(new File([listo], 'lamina.mp4', { type: 'video/mp4' }),
-      (b) => trabajo(rotulo, b, 'Subiéndolo.'));
+      (b, nota) => trabajo(rotulo, b, nota || 'Subiéndolo.'));
     quemados.set(lam.video, { firma: 'reencuadrado', ruta: sub.ruta });
     return { tipo: 'video', ruta: sub.ruta };
   }
@@ -2874,6 +3430,7 @@ async function videoDeLamina(lam, i){
     let solo = null;
     if(hayCodecs()){
       try{
+        rapidoNoPudo = false;
         solo = await quemarConCodecs(lam.crudo,
           (ctx, cuadro) => {
             ctx.clearRect(0, 0, ANCHO_FEED, altoSalida);
@@ -2883,13 +3440,14 @@ async function videoDeLamina(lam, i){
           (b) => trabajo(rotulo, b, pista), ANCHO_FEED, altoSalida);
       }catch(e){
         if(String(e.message) === 'Cancelado') throw e;
+        rapidoNoPudo = true;
         anotar('no se pudo acomodar el video', { porque: String(e.message).slice(0, 120), nivel: 'aviso' });
       }
     }
     if(solo){
       trabajo(rotulo, 1, 'Subiéndolo.');
       const sub = await guardarFoto(new File([solo], 'lamina.mp4', { type: 'video/mp4' }),
-        (b) => trabajo(rotulo, b, 'Subiéndolo.'));
+        (b, nota) => trabajo(rotulo, b, nota || 'Subiéndolo.'));
       return { tipo: 'video', ruta: sub.ruta };
     }
     // si no se pudo, se sigue por el camino de siempre y se le dibuja encima
@@ -2914,7 +3472,10 @@ async function videoDeLamina(lam, i){
   trabajo(rotulo, 0, espera);
 
   let video = null;
-  if(hayCodecs()){
+  /* Si el camino rápido ya no pudo con este archivo, no se lo vuelve a
+     intentar: fallaría igual, y cada intento carga el video entero en
+     memoria. Con dos seguidos, un video largo del iPhone tiraba la pestaña. */
+  if(hayCodecs() && !rapidoNoPudo){
     const arranque = Date.now();
     try{
       const logo = await cargarImagen(LOGO);
@@ -2937,7 +3498,7 @@ async function videoDeLamina(lam, i){
   }
   trabajo('Subiendo el video', 0, 'Ya está grabado: falta que llegue al servidor.');
   const sub = await guardarFoto(new File([video], 'lamina.mp4', { type: 'video/mp4' }),
-    (a) => trabajo('Subiendo el video', a, 'Ya está grabado: falta que llegue al servidor.'));
+    (a, nota) => trabajo('Subiendo el video', a, nota || 'Ya está grabado: falta que llegue al servidor.'));
   quemados.set(lam.crudo, { firma, ruta: sub.ruta });
   return { tipo: 'video', ruta: sub.ruta };
 }
@@ -2991,30 +3552,40 @@ document.addEventListener('drop', async (ev) => {
     }else if(zona.dataset.lamina !== undefined){
       await reemplazarLamina(Number(zona.dataset.lamina), archivos[0]);
     }else{
-      // en la zona del carrusel se agregan todas las que entren
-      const lugar = MAX_LAMINAS - (placa.laminas || []).length;
-      const entran = archivos.slice(0, lugar);
-      if(!entran.length) return estado(`El carrusel ya está lleno: ${MAX_LAMINAS + 1} imágenes más el cierre`, true);
-      abrirTrabajo();
-      const suPlaca = placa;
-      try{
-        for(const [i, archivo] of entran.entries()){
-          // el video abre su propio aviso, con su porcentaje
-          if(esVideo(archivo)){ await agregarVideo(archivo); continue; }
-          trabajo(`Subiendo ${entran.length > 1 ? `${i + 1} de ${entran.length}` : 'la foto'}`,
-            i / entran.length, archivo.name);
-          const { ruta } = await guardarFoto(archivo);
-          if(placa !== suPlaca) return estado('Las fotos subieron, pero ya estabas en otra noticia.', true);
-          placa.laminas = (placa.laminas || []).concat({ foto: ruta, ajuste: 'completa', x: 50, y: 50 });
-        }
-      }finally{ cerrarTrabajo(); }
-      cambio('laminas', placa.laminas);
-      await pintarLaminas();
-      estado(`${entran.length} foto${entran.length > 1 ? 's' : ''} al carrusel` +
-             (archivos.length > entran.length ? ` (${archivos.length - entran.length} no entraron)` : ''));
+      await agregarAlCarrusel(archivos);
     }
   }catch(e){ estado(e.message, true); }
 });
+
+/* Fotos y videos al final del carrusel, todos los que entren. Lo usan el
+   botón y soltar archivos sobre el carrusel. */
+async function agregarAlCarrusel(archivos){
+  archivos = archivos.filter((f) => f.type.startsWith('image/') || esVideo(f));
+  if(!archivos.length || !placa) return;
+  const lugar = MAX_LAMINAS - (placa.laminas || []).length;
+  const entran = archivos.slice(0, lugar);
+  if(!entran.length) return estado(`El carrusel ya está lleno: ${MAX_LAMINAS + 1} imágenes más el cierre`, true);
+  abrirTrabajo();
+  const suPlaca = placa;
+  let fotos = 0, videos = 0;
+  try{
+    for(const [i, archivo] of entran.entries()){
+      // el video abre su propio aviso, con su porcentaje
+      if(esVideo(archivo)){ await agregarVideo(archivo); videos++; continue; }
+      trabajo(`Subiendo ${entran.length > 1 ? `${i + 1} de ${entran.length}` : 'la foto'}`,
+        i / entran.length, archivo.name);
+      const { ruta } = await guardarFoto(archivo);
+      if(placa !== suPlaca) return estado('Las fotos subieron, pero ya estabas en otra noticia.', true);
+      placa.laminas = (placa.laminas || []).concat({ foto: ruta, ajuste: 'completa', x: 50, y: 50 });
+      fotos++;
+    }
+  }finally{ cerrarTrabajo(); }
+  cambio('laminas', placa.laminas);
+  await pintarLaminas();
+  const partes = [fotos && `${fotos} foto${fotos > 1 ? 's' : ''}`, videos && `${videos} video${videos > 1 ? 's' : ''}`].filter(Boolean);
+  estado(`${partes.join(' y ')} al carrusel` +
+         (archivos.length > entran.length ? ` (${archivos.length - entran.length} no entraron)` : ''));
+}
 
 $('#selector').addEventListener('change', (ev) => cargar(Number(ev.target.value)));
 $('#nueva').addEventListener('click', abrirPortada);
@@ -3055,6 +3626,152 @@ async function ultimaPlaca(){
 
 /* Si el editor no puede arrancar, hay que decirlo en la cara y no dejar
    un lienzo negro: el mensaje del panel queda al fondo y no se ve. */
+/* ------------------------------------------------------------------ */
+/* cuentas                                                             */
+/* ------------------------------------------------------------------ */
+
+/* Con quién se entró. null mientras el sitio todavía no tiene cuentas y se
+   entra con la clave de siempre: ahí no hay firma. */
+let yo = null;
+/* Lo que va en «Publicado por»: el nombre y la foto de la cuenta. Cada
+   pieza la recibe al dibujarse, así la vista previa la muestra igual que
+   va a salir publicada. */
+let firma = null;
+
+/* Quién es este navegador para el servidor: { usuario } con una cuenta,
+   { sitio, hayUsuarios } con la clave de siempre, o null si la sesión ya
+   no vale. Si el servidor no contesta, eso es otra cosa y se avisa como
+   error. */
+async function quienSoy(){
+  const r = await fetch('api/sesion.php', { headers: { 'x-clave': clave() } });
+  if(r.status === 401) return null;
+  const d = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error(d.error || `El servidor contestó ${r.status}`);
+  return d;
+}
+
+/* La pantalla para entrar. Mientras el sitio no tenga cuentas se pide la
+   clave de siempre, así nadie se queda afuera durante el cambio; en cuanto
+   existe la primera, cada uno entra con su usuario y su contraseña. */
+async function pantallaIngreso(mensaje){
+  let hay = true;
+  try{ hay = !!(await (await fetch('api/sesion.php?tarea=estado')).json()).hayUsuarios; }
+  catch(e){ /* sin respuesta se pide usuario: es lo que corresponde de ahora en más */ }
+  if(!hay) return pantallaClave(mensaje);
+
+  const portada = $('#portada');
+  portada.innerHTML = `
+    <h2>Entrar</h2>
+    ${mensaje ? `<p class="fallo">${esc(mensaje)}</p>` : ''}
+    <form class="ingreso" id="ingreso" autocomplete="on">
+      <input id="ing_usuario" name="usuario" placeholder="Usuario" autocomplete="username"
+             autocapitalize="none" spellcheck="false" required>
+      <input id="ing_clave" name="contrasena" type="password" placeholder="Contraseña"
+             autocomplete="current-password" required>
+      <button class="tarjeta-chica" type="submit">Entrar</button>
+      <p class="pista" id="ing_estado" aria-live="polite"></p>
+    </form>
+    <p class="pista">La cuenta te la crea quien administra el equipo.</p>`;
+  portada.hidden = false;
+
+  const form = $('#ingreso');
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const boton = form.querySelector('button');
+    boton.disabled = true;
+    $('#ing_estado').textContent = 'Entrando…';
+    try{
+      // fetch directo y no api(): un 401 acá es «contraseña mala», no «sesión vencida»
+      const r = await fetch('api/sesion.php', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tarea: 'entrar', usuario: $('#ing_usuario').value,
+                               contrasena: $('#ing_clave').value }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if(!r.ok) throw new Error(d.error || `Error ${r.status}`);
+      localStorage.setItem('clave_publicar', d.token);
+      location.reload();
+    }catch(e){
+      $('#ing_estado').textContent = e.message;
+      boton.disabled = false;
+    }
+  });
+  $('#ing_usuario').focus();
+}
+
+/* La foto de la cuenta arriba, con su menú. */
+function pintarCuenta(){
+  const caja = $('#cuenta');
+  if(!caja || !yo) return;
+  caja.hidden = false;
+  const boton = $('#yo');
+  const iniciales = yo.nombre.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join('');
+  boton.innerHTML = yo.foto ? `<img src="${esc(yo.foto)}" alt="">` : esc(iniciales);
+  boton.title = yo.nombre;
+  $('#menu_quien').innerHTML = `<b>${esc(yo.nombre)}</b><small>@${esc(yo.usuario)}${yo.rol === 'admin' ? ' · administración' : ''}</small>`;
+  $('#ir_equipo').hidden = yo.rol !== 'admin';
+}
+
+$('#yo')?.addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  $('#menu_yo').hidden = !$('#menu_yo').hidden;
+  $('#form_clave').hidden = true;
+});
+// el menú se cierra al tocar afuera
+document.addEventListener('click', (ev) => {
+  const menu = $('#menu_yo');
+  if(menu && !menu.hidden && !ev.target.closest('#cuenta')) menu.hidden = true;
+});
+
+/* El registro técnico —lo que antes se veía en «Qué pasó»— se sigue
+   anotando en este navegador, y se copia desde acá para mandarlo cuando
+   algo falla: cuánto pesaba el video, qué camino tomó, en qué paso se cortó. */
+$('#copiar_registro')?.addEventListener('click', async (ev) => {
+  const libro = leerBitacora();
+  const texto = libro.map((l) => {
+    const { t, evento, nivel, ...resto } = l;
+    const detalle = Object.entries(resto).map(([k, v]) => `${k}=${v}`).join(' ');
+    return `${new Date(t).toLocaleString('es-CL')}  ${evento}${detalle ? '  ' + detalle : ''}`;
+  }).join('\n');
+  try{
+    await navigator.clipboard.writeText(texto || 'sin nada anotado');
+    ev.target.textContent = `Copiado: ${libro.length} líneas`;
+  }catch(e){ ev.target.textContent = 'No se pudo copiar'; }
+  setTimeout(() => { ev.target.textContent = 'Copiar registro técnico'; }, 2500);
+});
+
+$('#salir')?.addEventListener('click', async () => {
+  try{
+    await fetch('api/sesion.php', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-clave': clave() },
+      body: JSON.stringify({ tarea: 'salir' }) });
+  }catch(e){ /* igual se olvida acá */ }
+  localStorage.removeItem('clave_publicar');
+  location.reload();
+});
+
+$('#cambiar_clave')?.addEventListener('click', () => {
+  $('#form_clave').hidden = !$('#form_clave').hidden;
+  $('#clave_actual').focus();
+});
+
+$('#form_clave')?.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const aviso = $('#clave_estado');
+  if($('#clave_nueva').value !== $('#clave_repetida').value){
+    aviso.textContent = 'Las dos contraseñas nuevas no son iguales.';
+    return;
+  }
+  aviso.textContent = 'Guardando…';
+  try{
+    await api('api/sesion.php', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tarea: 'clave', actual: $('#clave_actual').value, nueva: $('#clave_nueva').value }),
+    });
+    ev.target.reset();
+    aviso.textContent = 'Listo. Las sesiones abiertas en otros aparatos se cerraron.';
+  }catch(e){ aviso.textContent = e.message; }
+});
+
 function pantallaError(mensaje){
   const portada = $('#portada');
   portada.innerHTML = `
@@ -3117,7 +3834,7 @@ $('#portada').addEventListener('click', async (ev) => {
   const boton = ev.target.closest('[data-crear], #seguir');
   if(!boton) return;
   if(boton.id === 'seguir') return cargar(Number(boton.dataset.id));
-  const plantillas = { urgente: URGENTE, reel: REELS, noticia: BASE };
+  const plantillas = { urgente: URGENTE, reel: REELS, noticia: BASE, voz: VOZ_PLACA };
   cargar(await crear(plantillas[boton.dataset.crear] || BASE));
 });
 
@@ -3141,7 +3858,26 @@ $('#portada').addEventListener('click', async (ev) => {
   pintarDisenos();
   pintarPaleta();
   pintarChips();
-  if(!clave()) return pantallaClave();
+  if(!clave()) return pantallaIngreso();
+  try{
+    const quien = await quienSoy();
+    if(!quien){
+      localStorage.removeItem('clave_publicar');
+      return pantallaIngreso('La sesión venció: entrá de nuevo.');
+    }
+    /* Con la clave de siempre y cuentas ya creadas, se pide entrar: si no,
+       se podría seguir publicando sin nombre para siempre. */
+    if(quien.sitio && quien.hayUsuarios){
+      localStorage.removeItem('clave_publicar');
+      return pantallaIngreso('Desde ahora cada uno entra con su usuario y su contraseña.');
+    }
+    yo = quien.usuario || null;
+    if(yo) firma = { nombre: yo.nombre, imagen: yo.foto ? await cargarImagen(yo.foto) : null };
+    pintarCuenta();
+  }catch(e){
+    return pantallaError(e.message);
+  }
+  cargarRedes();
   // por si el hosting no tiene cron: al abrir, se publica lo que ya venció
   api('api/programar.php?tarea=vaciar&clave=' + encodeURIComponent(clave()))
     .catch(() => {});

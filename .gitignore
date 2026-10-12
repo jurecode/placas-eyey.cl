@@ -4,3 +4,5 @@ fotos/*
 publicaciones/*
 !publicaciones/.gitkeep
 .DS_Store
+# la marca de que las tablas ya están creadas: es de cada servidor
+api/.tablas-*

@@ -96,12 +96,32 @@
     border-radius:0 8px 8px 0; font-size:13.5px; line-height:1.5;
   }
   details summary{ cursor:pointer; font-size:13px; color:var(--suave) }
+  /* la guía de Meta: separada del formulario y con el título a la vista,
+     que es lo primero que se busca cuando el token deja de andar */
+  .guia{ margin-top:18px; border-top:1px solid var(--linea); padding-top:14px }
+  .guia summary{ color:var(--texto); font-weight:600; font-size:14px }
+  .guia ol{ margin-top:14px; gap:10px }
   #version{ font-size:14px }
   #version.fallo{ color:var(--ok); font-weight:600 }
   #version.aldia::after{ content:' · el botón se enciende cuando haya una nueva'; color:var(--suave); font-weight:400 }
   #resultado{ margin-top:14px; font-size:14px; min-height:20px }
   #resultado.error{ color:var(--mal) }
-  #resultado.bien{ color:var(--ok) }
+  #resultado.bien, #fb_resultado.bien{ color:var(--ok) }
+  #fb_resultado.error{ color:var(--mal) }
+  #fb_resultado{ margin-top:12px }
+  #tt_resultado{ margin-top:12px }
+  #tt_resultado.bien{ color:var(--ok) } #tt_resultado.error{ color:var(--mal) }
+  select{
+    width:100%; background:var(--hueco); color:var(--texto); font:inherit;
+    border:1px solid var(--linea); border-radius:8px; padding:9px 11px;
+  }
+  .guia ol ul.copiables{ margin:8px 0 4px; gap:6px }
+  .copiables li{ flex-wrap:nowrap; align-items:center; gap:8px }
+  .copiables li span{ flex:none; width:140px; font-size:12.5px }
+  .copiables code{ flex:1; min-width:0 }
+  .copiables button{ padding:4px 10px; font-size:12px }
+  @media (max-width:560px){ .copiables li{ flex-wrap:wrap } .copiables li span{ width:100% } }
+  input[type=file]{ padding:7px }
 </style>
 </head>
 <body>
@@ -109,6 +129,37 @@
 
   <h1>Panel de configuración
     <small id="de_quien">esta página no está enlazada desde el editor</small></h1>
+
+  <section>
+    <h2>Actualizaciones</h2>
+    <p id="version">Revisando…</p>
+    <div class="fila" style="margin-top:14px">
+      <button class="principal" id="actualizar" disabled>Actualizar el sitio</button>
+    </div>
+
+    <h3 class="titulillo">Qué cambió</h3>
+    <div id="novedades"><p class="nota">Revisando…</p></div>
+
+    <details style="margin-top:16px">
+      <summary>Token de GitHub</summary>
+      <div class="campo" style="margin-top:12px">
+        <input type="password" id="gh_token" placeholder="Token con permiso de lectura sobre el repo" autocomplete="off">
+      </div>
+      <button id="guardar_gh">Guardar token</button>
+      <p class="nota">
+        Este sitio se actualiza desde <code id="el_repo">…</code>. Si el
+        repositorio es público no hace falta token; si es privado, se crea uno
+        en GitHub → Settings → Developer settings → Fine-grained tokens, con
+        permiso <b>Contents: read</b> sobre ese repositorio y nada más. Queda
+        en la base, igual que el de Instagram.
+      </p>
+    </details>
+    <p class="nota">
+      Baja el zip de la última versión publicada y lo descomprime encima.
+      <b>Nunca toca <code>api/config.php</code></b>, así que tus credenciales
+      quedan donde están.
+    </p>
+  </section>
 
   <section>
     <h2>Clave</h2>
@@ -139,6 +190,165 @@
       los 60 días lo cambiás acá y listo, sin entrar por FTP. El token no se
       devuelve nunca: si el campo se ve vacío es porque ya está guardado.
     </p>
+
+    <!-- Los pasos siguen la documentación de Meta de octubre de 2026
+         (Instagram API con inicio de sesión de Instagram). Meta cambia los
+         nombres de los menús seguido: si dejan de coincidir, hay que
+         actualizar esto, no adivinar. -->
+    <details class="guia" open>
+      <summary>Cómo sacar un token nuevo en Meta, paso a paso</summary>
+      <ol>
+        <li>Abrí <a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer">developers.facebook.com/apps</a>
+          con la cuenta de Facebook que administra la app de publicación, y entrá a esa app.</li>
+        <li>En el menú de la izquierda, andá a <b>Instagram</b> → <b>API setup with Instagram business login</b>.
+          Si Meta está en español, aparece traducido con un nombre parecido.</li>
+        <li>En la lista de cuentas, tocá <b>Generate token</b> al lado de la cuenta del medio.
+          Si la cuenta no aparece, agregala primero con <b>Add account</b>.</li>
+        <li>Se abre Instagram: iniciá sesión con la cuenta del medio y aceptá todos los permisos
+          que pide, incluido el de publicar contenido.</li>
+        <li>Copiá el token con el botón de copiar de Meta, no seleccionándolo a mano: así no se
+          corta. Empieza con <code>IG</code> y tiene más de 150 caracteres.</li>
+        <li>Pegalo arriba, en <b>Token de larga duración</b>, y tocá <b>Guardar y probar</b>.
+          El <b>Id de la cuenta</b> no cambia: si ya está cargado, dejalo como está.</li>
+      </ol>
+      <p class="nota">
+        El token dura 60 días desde que se genera. Si en <b>Estado</b> dice que el token
+        guardado empieza con <code>EAA</code>, la app es de las de Facebook Login: ese se
+        saca en el <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener noreferrer">Explorador de la Graph API</a>
+        y se alarga en el <a href="https://developers.facebook.com/tools/debug/accesstoken/" target="_blank" rel="noopener noreferrer">Depurador de tokens</a>.
+      </p>
+    </details>
+  </section>
+
+  <section>
+    <h2>Página de Facebook</h2>
+    <p id="fb_estado" class="nota" style="margin-top:0">Escribí la clave y tocá Revisar.</p>
+    <div class="campo" style="margin-top:14px">
+      <label for="fb_token">Token de Facebook</label>
+      <input type="password" id="fb_token" placeholder="Empieza con EAA · se guarda en la base, no se muestra nunca más" autocomplete="off">
+    </div>
+    <div class="fila">
+      <button class="principal" id="conectar_fb">Conectar</button>
+      <button id="desconectar_fb" hidden>Desconectar</button>
+    </div>
+    <div id="fb_paginas" hidden style="margin-top:14px">
+      <p class="nota" style="margin:0 0 8px">Ese token maneja varias páginas. ¿En cuál se publica?</p>
+      <div class="fila" style="flex-wrap:wrap" id="fb_lista"></div>
+    </div>
+    <div id="fb_resultado" class="nota"></div>
+
+    <!-- Pasos según la documentación de Meta de octubre de 2026 (Pages API), con
+         los nombres de los menús como aparecen con Meta en español.
+         Si los menús dejan de coincidir, hay que actualizar esto. -->
+    <details class="guia" open>
+      <summary>Cómo conectar la página, paso a paso</summary>
+      <ol>
+        <li>Abrí el <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener noreferrer">Explorador de la API Graph</a>
+          con una cuenta de Facebook que administre la página del medio.</li>
+        <li>A la derecha, en <b>App de Meta</b>, elegí la app de publicación de este medio:
+          la misma con la que sacaste el token de Instagram. Fijate que no quede elegida la
+          de otro medio.</li>
+        <li>En <b>Usuario o página</b>, abrí el menú y elegí <b>Obtener token de acceso de usuario</b>.</li>
+        <li>Más abajo, en <b>Permisos</b>, usá <b>Agregar un permiso</b> para sumar estos tres:
+          <code>pages_show_list</code>, <code>pages_manage_posts</code> y
+          <code>pages_read_engagement</code>. Si alguno no aparece, en la app andá a
+          <b>Casos de uso</b> y agregá el de administrar páginas.</li>
+        <li>Tocá el botón azul <b>Generate Access Token</b> (generar token; Meta lo deja en
+          inglés). Se abre Facebook: marcá la página del medio y aceptá todos los permisos.</li>
+        <li>Copiá el token con el botón de copiar que está al lado del campo <b>Token de acceso</b>.</li>
+        <li>Abrí el <a href="https://developers.facebook.com/tools/debug/accesstoken/" target="_blank" rel="noopener noreferrer">Depurador de tokens de acceso</a>,
+          pegalo y tocá <b>Depurar</b>. Abajo de todo tocá <b>Ampliar token de acceso</b>
+          (en inglés, <b>Extend Access Token</b>) y copiá el token nuevo que aparece: ese es el que dura.</li>
+        <li>Pegalo arriba, en <b>Token de Facebook</b>, y tocá <b>Conectar</b>. Si manejás
+          varias páginas, elegí la del medio.</li>
+      </ol>
+      <p class="nota">
+        Con el token extendido, el de la página que se guarda no vence: no hay que
+        repetir esto cada 60 días como con Instagram. Solo deja de andar si
+        cambiás la contraseña de Facebook o te sacan de administrador de la página.
+      </p>
+    </details>
+  </section>
+
+  <section id="tiktok">
+    <h2>Cuenta de TikTok</h2>
+    <p id="tt_estado" class="nota" style="margin-top:0">Escribí la clave y tocá Revisar.</p>
+    <div id="tt_conectada" hidden style="margin-top:14px">
+      <p class="nota" style="margin:0 0 12px">
+        Quién ve cada publicación se elige en el editor, en el paso de TikTok que
+        aparece al publicar: TikTok exige que se decida cada vez.
+      </p>
+      <div class="fila">
+        <button id="reconectar_tt">Conectar otra vez</button>
+        <button id="desconectar_tt">Desconectar</button>
+      </div>
+    </div>
+    <div id="tt_resultado" class="nota"></div>
+
+    <!-- Pasos según la documentación de TikTok for Developers de octubre de
+         2026 (Login Kit web y Content Posting API). El portal está en
+         inglés: los nombres de los botones van como aparecen ahí. -->
+    <details class="guia" id="tt_guia" open>
+      <summary>Cómo conectar TikTok, paso a paso</summary>
+      <ol>
+        <li>Entrá a <a href="https://developers.tiktok.com/" target="_blank" rel="noopener noreferrer">developers.tiktok.com</a>,
+          iniciá sesión y andá a <b>Manage apps</b> → <b>Connect an app</b>. Ponele un nombre
+          (por ejemplo «<span class="tt-medio">el medio</span> Publicación»), un ícono, una categoría y una descripción corta.</li>
+        <li>En la misma ficha, completá estas direcciones, que ya están en el sitio:
+          <ul class="copiables">
+            <li><span>Terms of Service URL</span><code data-tt="terminos">…</code><button data-copiar="terminos">Copiar</button></li>
+            <li><span>Privacy Policy URL</span><code data-tt="privacidad">…</code><button data-copiar="privacidad">Copiar</button></li>
+            <li><span>Web/Desktop URL</span><code data-tt="sitio">…</code><button data-copiar="sitio">Copiar</button></li>
+          </ul>
+          En <b>Platforms</b> marcá <b>Web</b>.</li>
+        <li>En <b>Products</b>, agregá <b>Login Kit</b> y <b>Content Posting API</b>. Dentro de
+          Content Posting API, prendé <b>Direct Post</b>. En <b>Scopes</b> tienen que quedar
+          <code>user.info.basic</code> y <code>video.publish</code>.</li>
+        <li>En <b>Login Kit</b>, en <b>Redirect URI</b>, pegá esta dirección, tal cual:
+          <ul class="copiables">
+            <li><code data-tt="redirect">…</code><button data-copiar="redirect">Copiar</button></li>
+          </ul></li>
+        <li>TikTok baja las fotos del sitio y pide probar que el sitio es tuyo. En
+          <b>URL properties</b> → <b>Verify properties</b>, elegí <b>URL prefix</b> y pegá:
+          <ul class="copiables">
+            <li><code data-tt="prefijo">…</code><button data-copiar="prefijo">Copiar</button></li>
+          </ul>
+          Bajá el archivo que te da (se llama <code>tiktok….txt</code>), subilo acá y después
+          tocá <b>Verify</b> en TikTok:
+          <div class="fila" style="margin-top:8px">
+            <input type="file" id="tt_archivo" accept=".txt,text/plain">
+          </div>
+          <p class="nota" id="tt_verificado" style="margin-top:6px"></p></li>
+        <li>Mientras TikTok no revise la app, solo pueden conectarse las cuentas de prueba.
+          Arriba de la ficha, pasá a <b>Sandbox</b>, repetí ahí los pasos 3 y 4, y en
+          <b>Target users</b> agregá la cuenta de TikTok del medio.</li>
+        <li>Copiá la <b>Client key</b> y el <b>Client secret</b> (los del Sandbox, si estás
+          en Sandbox) y pegalos acá:
+          <div class="campo" style="margin-top:8px">
+            <label for="tt_key">Client key</label>
+            <input type="text" id="tt_key" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="campo">
+            <label for="tt_secret">Client secret</label>
+            <input type="password" id="tt_secret" placeholder="Se guarda en la base, no se muestra nunca más" autocomplete="off">
+          </div>
+          <button id="guardar_tt">Guardar</button></li>
+        <li>Hasta que TikTok apruebe la app, solo publica en cuentas privadas: en la app de
+          TikTok del medio, andá a <b>Configuración y privacidad</b> → <b>Privacidad</b> y
+          prendé <b>Cuenta privada</b>.</li>
+        <li>Tocá <b>Conectar con TikTok</b>, entrá con la cuenta del medio y aceptá todos los
+          permisos. Vuelve sola a este panel.
+          <div class="fila" style="margin-top:8px">
+            <button class="principal" id="conectar_tt">Conectar con TikTok</button>
+          </div></li>
+      </ol>
+      <p class="nota">
+        La conexión se renueva sola: dura un año sin tocar nada. Mientras la app no esté
+        aprobada, todo sale en privado («Solo yo»). Para publicar a la vista de todos,
+        en la ficha de la app tocá <b>Submit for review</b>; cuando TikTok la apruebe,
+        sacá la cuenta de privado y, al publicar, elegí <b>Todos</b> en el paso de TikTok.
+      </p>
+    </details>
   </section>
 
   <section>
@@ -165,37 +375,6 @@
     <p class="nota">
       Lleva tu clave adentro, así que no la compartas. Si la cambiás, hay que
       actualizar también el cron.
-    </p>
-  </section>
-
-  <section>
-    <h2>Actualizaciones</h2>
-    <p id="version">Revisando…</p>
-    <div class="fila" style="margin-top:14px">
-      <button class="principal" id="actualizar" disabled>Actualizar el sitio</button>
-    </div>
-
-    <h3 class="titulillo">Qué cambió</h3>
-    <div id="novedades"><p class="nota">Revisando…</p></div>
-
-    <details style="margin-top:16px">
-      <summary>Token de GitHub</summary>
-      <div class="campo" style="margin-top:12px">
-        <input type="password" id="gh_token" placeholder="Token con permiso de lectura sobre el repo" autocomplete="off">
-      </div>
-      <button id="guardar_gh">Guardar token</button>
-      <p class="nota">
-        Este sitio se actualiza desde <code id="el_repo">…</code>. Si el
-        repositorio es público no hace falta token; si es privado, se crea uno
-        en GitHub → Settings → Developer settings → Fine-grained tokens, con
-        permiso <b>Contents: read</b> sobre ese repositorio y nada más. Queda
-        en la base, igual que el de Instagram.
-      </p>
-    </details>
-    <p class="nota">
-      Baja el zip de la última versión publicada y lo descomprime encima.
-      <b>Nunca toca <code>api/config.php</code></b>, así que tus credenciales
-      quedan donde están.
     </p>
   </section>
 
@@ -242,25 +421,57 @@ const $ = (s) => document.querySelector(s);
    conviene saber en cuál se está antes de tocar nada. */
 import('./marca/marca.js')
   .then(({ MARCA }) => {
+    document.querySelectorAll('.tt-medio').forEach((el) => { el.textContent = MARCA.nombre; });
     $('#de_quien').textContent = MARCA.nombre + ' · esta página no está enlazada desde el editor';
     document.title = 'Panel — ' + MARCA.nombre;
   })
   .catch(() => {});
 
-/* Los errores de Meta son crípticos; se traduce lo que uno se encuentra. */
+/* Los errores de Meta son crípticos; se traduce lo que uno se encuentra.
+   Medido contra Meta con tokens inventados de cada forma:
+   - cortado, con un carácter cambiado o con un espacio en el medio: en su
+     puerta da «Failed to decrypt» (Instagram) o «Malformed» (Facebook);
+   - «Cannot parse» es otra cosa: lo dice una puerta cuando el token es de
+     la otra, o cuando tiene algo pegado delante —comillas, «Bearer »,
+     «access_token=»—. Antes esto se traducía como «está cortado», y no lo
+     estaba: había que buscar en otro lado. */
 function pistaToken(error){
   const e = String(error).toLowerCase();
-  if(e.includes('decrypt') || e.includes('cannot parse')){
-    return ' — el token está cortado o es de otra app. Copialo entero de nuevo ' +
-           'desde Meta; suelen tener más de 150 caracteres.';
+  if(e.includes('decrypt') || e.includes('malformed')){
+    return ' — Meta no puede leerlo: está incompleto o se le cambió algún carácter al ' +
+           'copiarlo. Copialo entero de nuevo desde Meta.';
+  }
+  if(e.includes('cannot parse')){
+    return ' — Meta no reconoce el formato. No es que esté cortado: suele ser un token de ' +
+           'otro tipo de app que la de esta cuenta, o con algo pegado que no es parte de él.';
   }
   if(e.includes('expired') || e.includes('session has expired')){
     return ' — el token venció. Generá uno nuevo en Meta y pegalo acá.';
   }
-  if(e.includes('does not exist') || e.includes('nonexisting field')){
-    return ' — revisá que el id de la cuenta sea el correcto.';
+  if(e.includes('does not exist') || e.includes('nonexisting field') || e.includes('unsupported get request')){
+    return ' — el token anda, pero no con esa cuenta: revisá que el id de la cuenta sea el ' +
+           'de la misma cuenta con la que se generó el token.';
+  }
+  if(e.includes('permission') || e.includes('scope')){
+    return ' — al token le faltan permisos: al generarlo hay que autorizar leer la cuenta ' +
+           'y publicar contenido.';
   }
   return '';
+}
+
+/* Lo que se sabe del token guardado sin mostrarlo: de qué tipo es, cuánto
+   mide, y qué se le sacó si venía con algo pegado. Con esto se ve de un
+   vistazo si se copió entero —los de Meta pasan de 150 caracteres— y si es
+   del tipo de app que se esperaba. */
+function describirToken(t){
+  if(!t) return '';
+  const tipo = t.tipo === 'instagram' ? 'de Instagram Login (empieza con IG)'
+    : t.tipo === 'facebook' ? 'de Facebook Login (empieza con EAA)'
+    : 'de un tipo que no se reconoce (no empieza con IG ni con EAA)';
+  let txt = `Token guardado: ${tipo}, ${t.largo} caracteres`;
+  if(t.largo < 120) txt += ' — es corto para un token de Meta: parece incompleto';
+  if(t.limpiado?.length) txt += `. Venía con cosas de más que se le sacaron: ${t.limpiado.join(', ')}`;
+  return txt + '.';
 }
 
 function pintar(datos){
@@ -283,7 +494,11 @@ function pintar(datos){
       <span>cuenta ${String(datos.cuenta.account_type || '').toLowerCase()} — el token funciona</span></li>`);
   }else if(datos.tokenError){
     filas.push(`<li><span class="marca no">✕</span><b>Token</b>
-      <span>${datos.tokenError}${pistaToken(datos.tokenError)}</span></li>`);
+      <span>${esc(datos.tokenError)}${pistaToken(datos.tokenError)}</span></li>`);
+  }
+  if(datos.token){
+    filas.push(`<li><span class="marca ${datos.cuenta ? 'si' : 'no'}">${datos.cuenta ? '✓' : '·'}</span>
+      <b>Token</b><span>${esc(describirToken(datos.token))}</span></li>`);
   }
   if(datos.cuenta && datos.host){
     filas.push(`<li><span class="marca si">✓</span><b>${datos.host}</b>
@@ -298,13 +513,14 @@ async function revisar(){
   res.className = ''; res.textContent = 'Revisando…';
   try{
     const r = await fetch('api/estado.php', { headers: { 'x-clave': clave } });
-    const datos = await r.json();
+    const datos = await leerJson(r);
     if(r.status === 401){
       res.className = 'error'; res.textContent = 'Clave incorrecta.';
       return;
     }
     if(clave) localStorage.setItem('clave_publicar', clave);
     pintar(datos);
+    revisarRedes();
     const faltan = datos.faltan || [];
     res.className = datos.listo ? 'bien' : 'error';
     if(datos.listo){
@@ -336,18 +552,199 @@ $('#guardar').addEventListener('click', async () => {
         ig_access_token: $('#ig_token').value.trim(),
       }),
     });
-    const d = await r.json();
+    const d = await leerJson(r);
     if(!r.ok) throw new Error(d.error || `Error ${r.status}`);
     $('#ig_token').value = '';
-    revisar();
+    await revisar();
+    // lo que se le sacó al pegarlo: al revisar ya no aparece, porque ya está limpio
+    if(d.token?.limpiado?.length){
+      res.textContent += ` (Al guardarlo se le sacó lo que venía pegado: ${d.token.limpiado.join(', ')}.)`;
+    }
   }catch(e){ res.className = 'error'; res.textContent = e.message; }
+});
+
+/* Facebook: si está conectada, a qué página, y si el token sigue andando. */
+function pintarFacebook(fb){
+  const el = $('#fb_estado');
+  $('#desconectar_fb').hidden = !fb?.conectado;
+  if(!fb?.conectado){
+    el.innerHTML = '<span class="no">✕</span> Sin conectar: el editor publica solo en Instagram.';
+    return;
+  }
+  const nombre = esc(fb.pagina?.nombre || fb.pagina?.id || '');
+  el.innerHTML = fb.funciona === false
+    ? `<span class="no">✕</span> Conectada a <b>${nombre}</b>, pero el token no anda: ${esc(fb.error || '')}${pistaToken(fb.error || '')}`
+    : `<span class="si">✓</span> Conectada a <b>${nombre}</b>: el editor ya puede publicar ahí.`;
+}
+
+async function revisarRedes(){
+  try{
+    const r = await fetch('api/redes.php?revisar=1', { headers: { 'x-clave': $('#clave').value.trim() } });
+    if(r.ok){
+      const d = await leerJson(r);
+      pintarFacebook(d.facebook);
+      pintarTiktok(d.tiktok);
+      if(location.hash === '#tiktok' && d.tiktok?.conectado){
+        avisoTt('TikTok quedó conectado.', true);
+        $('#tiktok').scrollIntoView();
+        history.replaceState(null, '', location.pathname);
+      }
+    }
+  }catch(e){ /* sin esto el resto del panel igual sirve */ }
+}
+
+async function redes(cuerpo){
+  const r = await fetch('api/redes.php', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clave: $('#clave').value.trim(), ...cuerpo }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error(d.error || `Error ${r.status}`);
+  return d;
+}
+
+function conectada(d){
+  const res = $('#fb_resultado');
+  $('#fb_paginas').hidden = true;
+  $('#fb_token').value = '';
+  pintarFacebook(d.facebook);
+  res.className = 'nota ' + (d.aviso ? 'error' : 'bien');
+  res.textContent = d.aviso || 'Listo. En el editor, arriba de Publicar, ya aparece Facebook.';
+}
+
+$('#conectar_fb').addEventListener('click', async () => {
+  const res = $('#fb_resultado');
+  res.className = 'nota'; res.textContent = 'Conectando…';
+  try{
+    const d = await redes({ tarea: 'conectar', token: $('#fb_token').value });
+    if(d.elegir){
+      res.textContent = '';
+      $('#fb_lista').innerHTML = d.elegir.map((p) =>
+        `<button data-pagina="${esc(p.id)}">${esc(p.nombre || p.id)}</button>`).join('');
+      $('#fb_paginas').hidden = false;
+      return;
+    }
+    conectada(d);
+  }catch(e){ res.className = 'nota error'; res.textContent = e.message + pistaToken(e.message); }
+});
+
+$('#fb_lista').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('[data-pagina]');
+  if(!b) return;
+  try{ conectada(await redes({ tarea: 'elegir', id: b.dataset.pagina })); }
+  catch(e){ $('#fb_resultado').className = 'nota error'; $('#fb_resultado').textContent = e.message; }
+});
+
+$('#desconectar_fb').addEventListener('click', async () => {
+  if(!confirm('¿Desconectar la página? El editor deja de publicar en Facebook.')) return;
+  try{ pintarFacebook((await redes({ tarea: 'desconectar' })).facebook); $('#fb_resultado').textContent = ''; }
+  catch(e){ $('#fb_resultado').className = 'nota error'; $('#fb_resultado').textContent = e.message; }
+});
+
+/* Lo que contesta el servidor. Si en vez de datos llega una página —el
+   hosting frenando pedidos, o cortando uno que tardó mucho—, se dice eso en
+   castellano y no «Unexpected token '<'», que no le dice nada a nadie. */
+async function leerJson(r){
+  const texto = await r.text();
+  try{ return JSON.parse(texto); }
+  catch(e){
+    const err = new Error(r.status === 429
+      ? 'El hosting frenó los pedidos por un rato (es un límite de SiteGround). Esperá un minuto y probá de nuevo.'
+      : r.status >= 500
+        ? `El hosting cortó el pedido (error ${r.status}), casi siempre porque tardó demasiado. Esperá un minuto y recargá la página.`
+        : `El servidor contestó una página en vez de datos (código ${r.status}). Recargá y probá de nuevo.`);
+    err.pagina = true;
+    throw err;
+  }
+}
+
+/* TikTok: el estado, las direcciones para copiar y la privacidad. */
+let direcciones = {};
+
+function pintarTiktok(tt){
+  const app = tt?.app || {};
+  const base = (app.prefijo || location.href.replace(/[^/]*$/, ''));
+  direcciones = { terminos: base + 'terminos.html', privacidad: base + 'privacidad.html',
+                  sitio: base, redirect: app.redirect_uri || base + 'api/tiktok.php', prefijo: base };
+  document.querySelectorAll('[data-tt]').forEach((el) => { el.textContent = direcciones[el.dataset.tt]; });
+  if(app.client_key && !$('#tt_key').value) $('#tt_key').value = app.client_key;
+  $('#tt_secret').placeholder = app.secret ? 'Ya está guardado · pegá otro solo para cambiarlo'
+    : 'Se guarda en la base, no se muestra nunca más';
+  $('#tt_verificado').textContent = app.verificacion ? `Subido: ${app.verificacion}` : '';
+
+  const el = $('#tt_estado');
+  $('#tt_conectada').hidden = !tt?.conectado;
+  if(!tt?.conectado){
+    el.innerHTML = '<span class="no">✕</span> Sin conectar. Seguí los pasos de abajo.';
+    return;
+  }
+  $('#tt_guia').open = false;
+  const quien = esc('@' + (tt.usuario || '') + (tt.nombre ? ` (${tt.nombre})` : ''));
+  el.innerHTML = tt.funciona === false
+    ? `<span class="no">✕</span> Conectada a <b>${quien}</b>, pero TikTok no contesta bien: ${esc(tt.error || '')}`
+    : `<span class="si">✓</span> Conectada a <b>${quien}</b>: el editor ya puede publicar ahí.`;
+}
+
+async function tiktok(cuerpo){
+  const r = await fetch('api/tiktok.php', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clave: $('#clave').value.trim(), ...cuerpo }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error(d.error || `Error ${r.status}`);
+  return d;
+}
+function avisoTt(texto, bien){
+  $('#tt_resultado').className = 'nota ' + (bien ? 'bien' : 'error');
+  $('#tt_resultado').textContent = texto;
+}
+
+document.addEventListener('click', async (ev) => {
+  const b = ev.target.closest('[data-copiar]');
+  if(!b) return;
+  try{ await navigator.clipboard.writeText(direcciones[b.dataset.copiar]); b.textContent = 'Copiado'; }
+  catch(e){ b.textContent = 'Seleccionalo a mano'; }
+  setTimeout(() => { b.textContent = 'Copiar'; }, 1600);
+});
+
+$('#guardar_tt').addEventListener('click', async () => {
+  try{
+    await tiktok({ tarea: 'credenciales', client_key: $('#tt_key').value, client_secret: $('#tt_secret').value });
+    $('#tt_secret').value = '';
+    avisoTt('Guardado. Ahora tocá «Conectar con TikTok».', true);
+    revisarRedes();
+  }catch(e){ avisoTt(e.message); }
+});
+
+$('#tt_archivo').addEventListener('change', async (ev) => {
+  const f = ev.target.files[0];
+  if(!f) return;
+  try{
+    const d = await tiktok({ tarea: 'verificacion', nombre: f.name, contenido: await f.text() });
+    $('#tt_verificado').innerHTML = `Listo: está en <a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.url)}</a>. Ahora tocá <b>Verify</b> en TikTok.`;
+  }catch(e){ $('#tt_verificado').textContent = e.message; }
+  ev.target.value = '';
+});
+
+async function conectarTiktok(){
+  try{ location.href = (await tiktok({ tarea: 'iniciar', volver: location.href.split('#')[0] })).url; }
+  catch(e){ avisoTt(e.message); }
+}
+$('#conectar_tt').addEventListener('click', conectarTiktok);
+$('#reconectar_tt').addEventListener('click', conectarTiktok);
+
+
+$('#desconectar_tt').addEventListener('click', async () => {
+  if(!confirm('¿Desconectar TikTok? El editor deja de publicar ahí.')) return;
+  try{ await tiktok({ tarea: 'desconectar' }); avisoTt(''); revisarRedes(); }
+  catch(e){ avisoTt(e.message); }
 });
 
 async function revisarVersion(){
   const el = $('#version');
   try{
     const r = await fetch('api/actualizar.php', { headers: { 'x-clave': $('#clave').value.trim() } });
-    const d = await r.json();
+    const d = await leerJson(r);
     if(!r.ok) throw new Error(d.error || `Error ${r.status}`);
     const instalada = d.instalada || 'sin registrar';
     el.textContent = d.hayNueva
@@ -406,7 +803,7 @@ $('#guardar_gh').addEventListener('click', async () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ clave: $('#clave').value.trim(), gh_token: $('#gh_token').value.trim() }),
     });
-    const d = await r.json();
+    const d = await leerJson(r);
     if(!r.ok) throw new Error(d.error || `Error ${r.status}`);
     $('#gh_token').value = '';
     revisarVersion();
@@ -423,12 +820,17 @@ $('#actualizar').addEventListener('click', async (ev) => {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ clave: $('#clave').value.trim(), actualizar: true }),
     });
-    const d = await r.json();
+    const d = await leerJson(r);
     if(!r.ok) throw new Error(d.error || `Error ${r.status}`);
     el.className = '';
     el.textContent = `Listo: versión ${d.version}, ${d.archivos} archivos actualizados.`;
     setTimeout(() => location.reload(), 1500);
-  }catch(e){ el.className = 'fallo'; el.textContent = e.message; ev.target.disabled = false; }
+  }catch(e){
+    el.className = 'fallo';
+    // si el hosting cortó la espera, la actualización pudo haber terminado igual
+    el.textContent = e.message + (e.pagina ? ' La actualización puede haber terminado igual: al recargar se ve qué versión quedó.' : '');
+    ev.target.disabled = false;
+  }
 });
 
 function pintarCron(){

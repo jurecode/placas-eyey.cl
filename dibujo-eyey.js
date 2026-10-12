@@ -11,6 +11,7 @@
 
 import {
   LIENZO, altoDe, aRgb, metricas, anchoDe, repartir, textoSobre, dibujarFoto, medidaLogo,
+  dibujarFirma,
 } from './placa.js';
 
 /* La letra del titular y de la etiqueta es Anton, que es Impact libre: mismas
@@ -32,6 +33,8 @@ export const MEDIDAS = {
   degradado: { desde: 30, final: 0.96, curva: 1.6 },
 
   logo:     { arriba: 300, alto: 190, ancho: 700 },
+  // «Publicado por»: entre el borde de arriba y el logo
+  firma:    { arriba: 50, escala: .8 },
 
   // la etiqueta es un rectángulo recto, arriba a la derecha
   // pegada al borde derecho, como en el arte
@@ -294,6 +297,15 @@ export function dibujar(ctx, datos, fotos, ancho, marca = {}){
   lineas.forEach((linea, i) => textoDeLinea(ctx, linea, medidas[i], bases[i], px, 0, colores));
 
   dibujarHuincha(ctx, datos, marca, u, ancho, alto);
+
+  /* «Publicado por», con la foto de quien publica. Va arriba, alineado con
+     el logo y por encima de él: en el lugar del otro medio (110, 110) se
+     montaba sobre el logo, que acá arranca más abajo. Un poco más chica que
+     allá, para que no compita con la etiqueta. */
+  if(fotos.firma){
+    dibujarFirma(ctx, fotos.firma, u * MEDIDAS.firma.escala, MEDIDAS.margen * u, MEDIDAS.firma.arriba * u,
+      datos.color_filete || '#ff0000');
+  }
 }
 
 /* La lámina del carrusel: la foto con el degradado y la huincha, sin texto. */

@@ -12,15 +12,21 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') responder(['error' => 'Solo P
 
 $entrada = json_decode(file_get_contents('php://input') ?: '', true);
 if (!is_array($entrada)) responder(['error' => 'No llegó el cuerpo de la petición'], 400);
-exigir_clave($entrada);
+$quien = exigir_clave($entrada);
 
 try {
-    responder(publicar_ahora([
+    $r = publicar_ahora([
         'items'         => $entrada['items'] ?? $entrada['imagenes'] ?? [],
         'caption'       => $entrada['caption'] ?? '',
         'colaboradores' => $entrada['colaboradores'] ?? '',
         'etiquetados'   => $entrada['etiquetados'] ?? '',
-    ]));
+        'redes'         => $entrada['redes'] ?? ['instagram'],
+        // lo que se eligió en el paso de TikTok del editor
+        'tiktok'        => is_array($entrada['tiktok'] ?? null) ? $entrada['tiktok'] : null,
+    ]);
+    // a nombre de quien entró; con la clave del sitio queda sin nombre
+    registrar_redes($quien['id'], (array) ($entrada['placa'] ?? []), $r);
+    responder($r);
 } catch (Throwable $e) {
     responder(['error' => $e->getMessage()], 502);
 }

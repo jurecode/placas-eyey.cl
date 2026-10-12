@@ -20,24 +20,53 @@ export const altoDe = (ancho) => Math.round(ancho * ALTO / LIENZO);
 export const MEDIDAS = {
   /* El collage va de `y` hasta `abajo` unidades del borde inferior: se estira
      con el lienzo en vez de tener un alto fijo, que es lo que hace que el
-     4:5 no obligue a recolocar nada. */
-  media:    { x: 318, y: 136, ancho: 2364, abajo: 1260, radio: 48, filete: 30 },
-  // el centro se da en % del collage; 50/62.6 es el del arte original
-  circulo:  { x: 50, y: 62.6, radio: 512, anillo: 30 },
+     4:5 no obligue a recolocar nada.
+     Va a sangre: de borde a borde y desde arriba del todo. Antes era un
+     recuadro con márgenes de color alrededor y las esquinas redondeadas, y
+     la foto —que es lo que hace que alguien se detenga en el feed— ocupaba
+     poco más de la mitad de la placa. Ahora llega más abajo y se funde con
+     el color justo donde empieza el titular. */
+  media:    { x: 0, y: 0, ancho: 3000, abajo: 880, radio: 0, filete: 30 },
+  /* El fundido de la foto con el color de la placa: desde dónde arranca, en
+     % del alto de la foto, y con qué opacidad termina. Antes terminaba en
+     0,933 porque la foto acababa en el borde de su recuadro; ahora la foto
+     sigue de largo hasta el color liso, y si no llegara al 100 % quedaría
+     una raya horizontal de lado a lado. */
+  /* `curva` es cuánto tarda en tomar color: con 1,5, la del arte original,
+     las primeras líneas de un titular largo quedaban blancas sobre la foto
+     casi sin color debajo y se perdían en una foto clara. */
+  fundido:  { desde: 50, final: 1, curva: 1.15 },
+  /* El centro se da en % del collage. Con el titular más grande el círculo
+     sube un poco: en el 62,6 del arte original quedaba debajo de las letras,
+     y más arriba tapaba las caras de las dos fotos. */
+  circulo:  { x: 50, y: 50, radio: 512, anillo: 30 },
   pie:      { x: 414, margenDerecho: 318, abajo: 479, separacion: 83 },
-  filete:   { ancho: 28, respiro: 11.5 },
-  // cinta: forma y colores fijos, es la etiqueta oficial del medio
-  etiqueta: { fuente: 74, padY: 22, padX: 96, sesgo: 44, separacion: 168,
+  /* El filete y la cinta crecen con el titular, un poco menos que él: al
+     lado de letras un 45 % más grandes, con su medida de antes quedaban como
+     de otra pieza. La forma y los colores de la cinta no cambian: es la
+     etiqueta oficial del medio. */
+  filete:   { ancho: 34, respiro: 14 },
+  etiqueta: { fuente: 92, padY: 27, padX: 118, sesgo: 54, separacion: 190,
               fondo: '#ffffff', texto: '#111111' },
   // El logo entra en una caja: manda la altura, para que el aire entre el
   // titular y el pie no cambie si el logo cambia de proporción, pero se
   // acota el ancho por si el lockup es muy apaisado.
   logo:     { alto: 280, ancho: 1560, abajo: 117 },
-  /* El cuerpo del titular es parte del diseño y no se toca: es la medida del
-     arte original. Si un titular es tan largo que se saldría por arriba, se
-     achica solo lo justo para que entre. */
-  titular:  { fuente: 143, arriba: 120 },
+  /* El cuerpo del titular es parte del diseño y no se toca desde el editor.
+     Era 143, la medida del arte original, y en el teléfono se leía chico:
+     ahora es un 45 % más grande, para que el titular sea lo primero que se
+     ve. `arriba` es hasta dónde puede subir el bloque: un titular muy largo
+     se achica solo lo justo para no pasar de ahí, en vez de tapar la cara
+     de la foto. */
+  titular:  { fuente: 207, arriba: 1900 },
   urgente:  { arriba: 790, margen: 180, bajada: 190, separacion: 166, fuente: 900 },
+  /* Urgente con la noticia escrita abajo: «URGENTE / AHORA» se achica a
+     `escala` y sube, y debajo va el texto. Todo el conjunto se centra entre
+     `techo` (debajo de «Publicado por») y el logo, dejando `aireLogo`.
+     El texto se achica solo hasta `minimo` si es largo. */
+  urgenteNoticia: { escala: .6, techo: 470, aireLogo: 230, raya: 230, grosorRaya: 16,
+                    antesRaya: 120, despuesRaya: 130, fuente: 178, minimo: 104,
+                    interlinea: 1.2, margen: 230 },
 };
 
 /* La interlínea acompaña al tamaño de letra en la misma proporción que el
@@ -49,6 +78,7 @@ export const TIPOS = {
   etiqueta: '500 {px}px "Inter Tight", Arial, sans-serif',
   urgenteBajada: '700 {px}px "Poppins", Arial, sans-serif',
   urgenteTexto:  '900 {px}px "Poppins", Arial, sans-serif',
+  urgenteNoticia: '700 {px}px "Inter Tight", Arial, sans-serif',
 };
 
 export const fuente = (plantilla, px) => plantilla.replace('{px}', px);
@@ -72,7 +102,7 @@ export const DEG_INICIO = 68;    // dónde arranca, en % del alto
 export const DEG_FINAL  = 0.933; // opacidad en el borde de abajo
 export const DEG_CURVA  = 1.5;   // exponente: arranca suave y se acelera
 
-export function degradado(ctx, datos, x, y, ancho, alto, desde = DEG_INICIO){
+export function degradado(ctx, datos, x, y, ancho, alto, desde = DEG_INICIO, final = DEG_FINAL, curva = DEG_CURVA){
   const [r, g, b] = aRgb(datos.color_fondo);
   const grad = ctx.createLinearGradient(0, y, 0, y + alto);
   const inicio = desde / 100;
@@ -81,7 +111,7 @@ export function degradado(ctx, datos, x, y, ancho, alto, desde = DEG_INICIO){
   grad.addColorStop(inicio, `rgba(${r},${g},${b},0)`);
   for(let i = 1; i <= pasos; i++){
     const t = i / pasos;
-    const alfa = DEG_FINAL * Math.pow(t, DEG_CURVA);
+    const alfa = final * Math.pow(t, curva);
     grad.addColorStop(inicio + t * (1 - inicio), `rgba(${r},${g},${b},${alfa.toFixed(4)})`);
   }
   return grad;
@@ -294,18 +324,127 @@ function dibujarEtiqueta(ctx, datos, u, abajoDe){
 }
 
 /* ------------------------------------------------------------------ */
+/* firma de quien publica                                              */
+/* ------------------------------------------------------------------ */
+
+/* Quién publicó la pieza: su foto en un círculo con un borde blanco fino,
+   y al lado «Publicado por» y su nombre. Va sobre una píldora oscura y
+   translúcida —la misma de la franja de la voz— para que se lea sobre
+   cualquier foto, y arriba a la izquierda: abajo ya están el titular, la
+   etiqueta y el logo, y arriba hay aire. En unidades del arte de 3000. */
+export const FIRMA = {
+  x: 110, y: 110,
+  /* En el feed la placa se ve a un tercio de su tamaño: con «Publicado
+     por» más chico que esto, en el teléfono no se llega a leer. */
+  foto: 204, borde: 9,          // el círculo y su borde blanco
+  relleno: 18,                  // entre el círculo y el borde de la píldora
+  aire: 40,                     // entre el círculo y el texto
+  rotulo: 52, nombre: 90,       // los dos renglones
+  entre: 18,                    // entre un renglón y el otro
+  derecha: 66,                  // después del texto, hasta el final de la píldora
+  maxTexto: 1500,               // un nombre muy largo se achica hasta acá
+};
+
+/* `firma` es { nombre, imagen }: sin imagen van las iniciales sobre el
+   color del filete. `k` es la escala (ancho del lienzo / 3000) y `x`,`y`
+   la esquina, en píxeles. */
+export function dibujarFirma(ctx, firma, k, x, y, color = '#0ae7ae'){
+  const nombre = String(firma?.nombre || '').trim();
+  if(!nombre) return;
+  const F = FIRMA;
+  const rotulo = 'PUBLICADO POR';
+  const pxR = F.rotulo * k;
+  const interR = 0.14 * pxR;
+  let pxN = F.nombre * k;
+  // un nombre muy largo se achica en vez de estirar la píldora sobre la placa
+  const anchoN = anchoDe(ctx, nombre, TIPOS.titular, pxN, 0);
+  if(anchoN > F.maxTexto * k) pxN *= F.maxTexto * k / anchoN;
+
+  const d = F.foto * k;
+  const alto = d + F.relleno * 2 * k;
+  const cx = x + F.relleno * k + d / 2;
+  const cy = y + alto / 2;
+  const x0 = cx + d / 2 + F.aire * k;
+  const anchoTexto = Math.max(anchoDe(ctx, rotulo, TIPOS.etiqueta, pxR, interR),
+                              anchoDe(ctx, nombre, TIPOS.titular, pxN, 0));
+  const ancho = x0 - x + anchoTexto + F.derecha * k;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(x, y, ancho, alto, alto / 2);
+  ctx.fillStyle = 'rgba(12,10,16,0.46)';
+  ctx.fill();
+
+  // la foto, recortada en círculo; sin foto, las iniciales
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, d / 2, 0, Math.PI * 2);
+  ctx.clip();
+  if(firma.imagen){
+    dibujarFoto(ctx, firma.imagen, cx - d / 2, cy - d / 2, d, d, 'cubrir', 50, 30, k);
+  }else{
+    ctx.fillStyle = color;
+    ctx.fillRect(cx - d / 2, cy - d / 2, d, d);
+    const iniciales = nombre.split(/\s+/).filter(Boolean).slice(0, 2)
+      .map((p) => p[0].toUpperCase()).join('');
+    const pxI = d * 0.4;
+    ctx.font = fuente(TIPOS.titular, pxI);
+    ctx.letterSpacing = '0px';
+    ctx.fillStyle = textoSobre(color);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(iniciales, cx, cy + metricas(ctx, TIPOS.titular, pxI).mayuscula / 2);
+  }
+  ctx.restore();
+  // el borde blanco fino, que la despega de la píldora
+  ctx.beginPath();
+  ctx.arc(cx, cy, d / 2 - F.borde * k / 2, 0, Math.PI * 2);
+  ctx.lineWidth = F.borde * k;
+  ctx.strokeStyle = '#fff';
+  ctx.stroke();
+
+  // los dos renglones, centrados en alto con el círculo
+  const capR = metricas(ctx, TIPOS.etiqueta, pxR).mayuscula;
+  const capN = metricas(ctx, TIPOS.titular, pxN).mayuscula;
+  const arriba = cy - (capR + F.entre * k + capN) / 2;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = fuente(TIPOS.etiqueta, pxR);
+  ctx.letterSpacing = `${interR}px`;
+  ctx.fillStyle = 'rgba(255,255,255,0.78)';
+  ctx.fillText(rotulo, x0, arriba + capR);
+  ctx.font = fuente(TIPOS.titular, pxN);
+  ctx.letterSpacing = '0px';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(nombre, x0, arriba + capR + F.entre * k + capN);
+  ctx.restore();
+}
+
+/* ------------------------------------------------------------------ */
 /* formatos                                                            */
 /* ------------------------------------------------------------------ */
 
-function dibujarNoticia(ctx, datos, fotos, u, altoLienzo){
+/* El recuadro de la foto, en píxeles. */
+function cajaFoto(u, altoLienzo){
   const M = MEDIDAS.media;
   const x = M.x * u, y = M.y * u, ancho = M.ancho * u;
-  const alto = altoLienzo - y - M.abajo * u;
+  /* El borde de abajo, en un píxel entero. A 1080 de ancho caía en 1033,2:
+     la fila de ese borde quedaba tapada a medias dos veces —por la foto y
+     por el fundido—, y se veía una raya oscura de un píxel de lado a lado,
+     también en lo publicado. */
+  return { x, y, ancho, alto: Math.round(altoLienzo - y - M.abajo * u), radio: M.radio * u };
+}
 
-  // collage
+/* La foto de la placa —el collage y el círculo—, sin el fundido ni nada
+   encima. Va separada del texto para que la placa con voz pueda moverla
+   sola, debajo de un texto quieto. */
+function fotoNoticia(ctx, datos, fotos, u, altoLienzo){
+  const M = MEDIDAS.media;
+  const { x, y, ancho, alto, radio } = cajaFoto(u, altoLienzo);
+
   ctx.save();
   ctx.beginPath();
-  ctx.roundRect(x, y, ancho, alto, M.radio * u);
+  ctx.roundRect(x, y, ancho, alto, radio);
   ctx.clip();
   ctx.fillStyle = '#0b0b0d';
   ctx.fillRect(x, y, ancho, alto);
@@ -324,32 +463,50 @@ function dibujarNoticia(ctx, datos, fotos, u, altoLienzo){
     const C = MEDIDAS.circulo;
     const cx = x + ancho * (datos.circulo_x ?? C.x) / 100;
     const cy = y + alto * (datos.circulo_y ?? C.y) / 100;
-    const radio = C.radio * u;
+    const radioC = C.radio * u;
     ctx.save();
     ctx.beginPath();
-    ctx.arc(cx, cy, radio - C.anillo * u, 0, Math.PI * 2);
+    ctx.arc(cx, cy, radioC - C.anillo * u, 0, Math.PI * 2);
     ctx.clip();
-    const lado = (radio - C.anillo * u) * 2;
+    const lado = (radioC - C.anillo * u) * 2;
     dibujarFoto(ctx, fotos.cen, cx - lado / 2, cy - lado / 2, lado, lado,
       datos.foto_cen_ajuste, datos.foto_cen_x, datos.foto_cen_y, u);
     ctx.restore();
     ctx.beginPath();
-    ctx.arc(cx, cy, radio - C.anillo * u / 2, 0, Math.PI * 2);
+    ctx.arc(cx, cy, radioC - C.anillo * u / 2, 0, Math.PI * 2);
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = C.anillo * u;
     ctx.stroke();
   }
+  ctx.restore();
+}
 
-  // fundido con el fondo
-  ctx.fillStyle = degradado(ctx, datos, x, y, ancho, alto);
+/* El fundido de la foto con el color de la placa. */
+function fundidoNoticia(ctx, datos, u, altoLienzo){
+  const { x, y, ancho, alto, radio } = cajaFoto(u, altoLienzo);
+  const F = MEDIDAS.fundido;
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(x, y, ancho, alto, radio);
+  ctx.clip();
+  ctx.fillStyle = degradado(ctx, datos, x, y, ancho, alto, F.desde, F.final, F.curva);
   ctx.fillRect(x, y, ancho, alto);
   ctx.restore();
+}
 
-  // titular, anclado por abajo
-  const maxAncho = (LIENZO - MEDIDAS.media.x - MEDIDAS.pie.x - MEDIDAS.pie.separacion) * u;
+/* El titular, el filete y la etiqueta, anclados por abajo.
+   `tope` es hasta dónde puede subir el bloque, en unidades del arte: la
+   placa con voz lo baja para dejar lugar a su franja.
+   `anim`, si viene, mueve cada pieza en la entrada animada:
+   { linea(i) → {dy, alfa}, etiqueta: {dy, alfa}, filete: 0..1 }.
+   Devuelve dónde quedó todo, para poder poner algo encima. */
+function textoNoticia(ctx, datos, u, altoLienzo, tope = MEDIDAS.titular.arriba, anim = null){
+  // El margen derecho es el del pie: antes se tomaba del recuadro de la
+  // foto, que ya no tiene márgenes.
+  const maxAncho = (LIENZO - MEDIDAS.pie.margenDerecho - MEDIDAS.pie.x - MEDIDAS.pie.separacion) * u;
   const respiro = MEDIDAS.filete.respiro * u;
   const abajoCaja = altoLienzo - MEDIDAS.pie.abajo * u - respiro;
-  const tope = MEDIDAS.titular.arriba * u;
+  const topePx = tope * u;
 
   /* Se prueba con el cuerpo del arte y, si el bloque se saldría por arriba,
      se baja de a poco hasta que entre. Sin esto un titular muy largo se corta
@@ -362,7 +519,7 @@ function dibujarNoticia(ctx, datos, fotos, u, altoLienzo){
     lineas = repartir(ctx, datos.titulo, TIPOS.titular, px, inter, maxAncho);
     met = metricas(ctx, TIPOS.titular, px);
     arribaTexto = abajoCaja - lineas.length * interlinea;
-    if(arribaTexto >= tope) break;
+    if(arribaTexto >= topePx) break;
     px *= 0.92;
   }
   const medioInterlineado = (interlinea - (met.ascenso + met.descenso)) / 2;
@@ -383,22 +540,64 @@ function dibujarNoticia(ctx, datos, fotos, u, altoLienzo){
     interExtra: 0.022 * px,     // las destacadas van con las letras más sueltas
   };
   lineas.forEach((linea, i) => {
+    const mov = anim ? anim.linea(i) : null;
+    if(mov && mov.alfa <= 0) return;
+    if(mov){ ctx.save(); ctx.globalAlpha = mov.alfa; ctx.translate(0, mov.dy * u); }
     dibujarLinea(ctx, linea, equis,
       arribaTexto + i * interlinea + medioInterlineado + met.ascenso,
       caja, TIPOS.titular, px, inter, colores);
+    if(mov) ctx.restore();
   });
   ctx.restore();
 
-  // filete: mide exactamente lo mismo que el bloque de texto
+  // filete: mide exactamente lo mismo que el bloque de texto; en la entrada
+  // crece de arriba hacia abajo
+  const largoFilete = lineas.length * interlinea + respiro * 2;
   ctx.fillStyle = datos.color_filete;
   ctx.fillRect(MEDIDAS.pie.x * u, arribaTexto - respiro,
-    MEDIDAS.filete.ancho * u, lineas.length * interlinea + respiro * 2);
+    MEDIDAS.filete.ancho * u, largoFilete * (anim ? anim.filete : 1));
 
-  dibujarEtiqueta(ctx, datos, u, arribaTexto - respiro);
+  let arribaEtiqueta;
+  if(anim){
+    ctx.save();
+    ctx.globalAlpha = anim.etiqueta.alfa;
+    ctx.translate(0, anim.etiqueta.dy * u);
+    arribaEtiqueta = dibujarEtiqueta(ctx, datos, u, arribaTexto - respiro);
+    ctx.restore();
+  }else{
+    arribaEtiqueta = dibujarEtiqueta(ctx, datos, u, arribaTexto - respiro);
+  }
+  return { arribaTexto, arribaEtiqueta, lineas: lineas.length };
+}
+
+function dibujarNoticia(ctx, datos, fotos, u, altoLienzo){
+  fotoNoticia(ctx, datos, fotos, u, altoLienzo);
+  fundidoNoticia(ctx, datos, u, altoLienzo);
+  return textoNoticia(ctx, datos, u, altoLienzo);
+}
+
+/* Parte un texto en renglones que entren en `disponible`. Respeta los
+   saltos de línea que se escribieron a mano. */
+function enRenglones(ctx, texto, tipo, px, disponible){
+  const renglones = [];
+  for(const parrafo of String(texto).split('\n')){
+    let linea = '';
+    for(const palabra of parrafo.split(/\s+/).filter(Boolean)){
+      const prueba = linea ? linea + ' ' + palabra : palabra;
+      if(linea && anchoDe(ctx, prueba, tipo, px, 0) > disponible){
+        renglones.push(linea);
+        linea = palabra;
+      }else linea = prueba;
+    }
+    if(linea) renglones.push(linea);
+  }
+  return renglones;
 }
 
 function dibujarUrgente(ctx, datos, fotos, u, ancho, alto){
   const U = MEDIDAS.urgente;
+  const N = MEDIDAS.urgenteNoticia;
+  const noticia = String(datos.noticia || '').trim();
 
   // fondo: color de la paleta oscurecido hacia el negro por abajo
   ctx.fillStyle = datos.color_fondo;
@@ -415,35 +614,74 @@ function dibujarUrgente(ctx, datos, fotos, u, ancho, alto){
   ctx.textBaseline = 'alphabetic';
   const centro = ancho / 2;
 
-  // "URGENTE", fijo
-  const pxBajada = U.bajada * u;
+  /* Con noticia, «URGENTE / AHORA» va más chico y arriba; sin ella, como
+     siempre: grande y al medio. */
+  const k = noticia ? N.escala : 1;
+  const pxBajada = U.bajada * u * k;
   const metBajada = metricas(ctx, TIPOS.urgenteBajada, pxBajada);
-  ctx.font = fuente(TIPOS.urgenteBajada, pxBajada);
-  ctx.letterSpacing = `${-0.01 * pxBajada}px`;
-  // acá no hay foto que estire: el bloque entero baja la mitad del alto que
-  // ganó el lienzo, y así queda a la misma altura del centro que en cuadrado
-  const arribaBajada = U.arriba * u + (alto - ancho) / 2;
-  ctx.fillText('URGENTE', centro,
-    arribaBajada + (pxBajada - (metBajada.ascenso + metBajada.descenso)) / 2 + metBajada.ascenso);
 
-  // la palabra grande se estira hasta llenar el ancho
-  const disponible = ancho - U.margen * u * 2;
+  // la palabra grande se estira hasta llenar el ancho (con noticia, una fracción)
+  const disponible = (ancho - U.margen * u * 2) * k;
   const lineas = String(datos.titulo).toUpperCase().split('\n').filter((l) => l.trim());
-  let px = MEDIDAS.urgente.fuente * u;
+  let px = U.fuente * u * k;
   const anchoCon = (tam) => Math.max(...lineas.map(
     (l) => anchoDe(ctx, l, TIPOS.urgenteTexto, tam, -0.1 * tam)));
   const medido = anchoCon(px);
   if(medido > disponible) px = px * disponible / medido;
-
   const met = metricas(ctx, TIPOS.urgenteTexto, px);
   const interlinea = px * .95;
+  const separacion = U.separacion * u * k;
+  const altoBloque = pxBajada + separacion + lineas.length * interlinea;
+
+  /* La noticia: renglones que entren en el ancho, achicando la letra si no
+     caben entre el bloque de arriba y el logo. */
+  let renglones = [], pxNoticia = 0, altoNoticia = 0;
+  const abajoLibre = alto - (MEDIDAS.logo.abajo + MEDIDAS.logo.alto + N.aireLogo) * u;
+  const extra = (N.antesRaya + N.grosorRaya + N.despuesRaya) * u;
+  if(noticia){
+    const anchoNoticia = ancho - N.margen * u * 2;
+    const cabe = abajoLibre - N.techo * u - altoBloque - extra;
+    for(pxNoticia = N.fuente * u; ; pxNoticia *= .94){
+      renglones = enRenglones(ctx, noticia, TIPOS.urgenteNoticia, pxNoticia, anchoNoticia);
+      altoNoticia = renglones.length * pxNoticia * N.interlinea;
+      if(altoNoticia <= cabe || pxNoticia <= N.minimo * u) break;
+    }
+  }
+
+  // acá no hay foto que estire: sin noticia, el bloque baja la mitad del
+  // alto que ganó el lienzo, y así queda a la misma altura del centro que en
+  // cuadrado; con noticia, el conjunto se centra en el espacio libre
+  const arribaBajada = noticia
+    ? N.techo * u + Math.max(0, (abajoLibre - N.techo * u - (altoBloque + extra + altoNoticia)) / 2)
+    : U.arriba * u + (alto - ancho) / 2;
+
+  // "URGENTE", fijo
+  ctx.font = fuente(TIPOS.urgenteBajada, pxBajada);
+  ctx.letterSpacing = `${-0.01 * pxBajada}px`;
+  ctx.fillText('URGENTE', centro,
+    arribaBajada + (pxBajada - (metBajada.ascenso + metBajada.descenso)) / 2 + metBajada.ascenso);
+
   ctx.font = fuente(TIPOS.urgenteTexto, px);
   ctx.letterSpacing = `${-0.1 * px}px`;
-  const arriba = arribaBajada + pxBajada + U.separacion * u;
+  const arriba = arribaBajada + pxBajada + separacion;
   lineas.forEach((linea, i) => {
     ctx.fillText(linea, centro,
       arriba + i * interlinea + (interlinea - (met.ascenso + met.descenso)) / 2 + met.ascenso);
   });
+
+  if(noticia){
+    // una raya corta separa el aviso de la noticia
+    const yRaya = arriba + lineas.length * interlinea + N.antesRaya * u;
+    ctx.fillRect(centro - N.raya * u / 2, yRaya, N.raya * u, N.grosorRaya * u);
+    const metN = metricas(ctx, TIPOS.urgenteNoticia, pxNoticia);
+    const paso = pxNoticia * N.interlinea;
+    const desde = yRaya + (N.grosorRaya + N.despuesRaya) * u;
+    ctx.font = fuente(TIPOS.urgenteNoticia, pxNoticia);
+    ctx.letterSpacing = `${-0.01 * pxNoticia}px`;
+    renglones.forEach((r, i) => {
+      ctx.fillText(r, centro, desde + i * paso + (paso - (metN.ascenso + metN.descenso)) / 2 + metN.ascenso);
+    });
+  }
   ctx.restore();
 }
 
@@ -471,6 +709,7 @@ export function dibujar(ctx, datos, fotos, ancho){
     ctx.drawImage(fotos.logo, (ancho - anchoLogo) / 2,
       alto - (L.abajo * u) - altoLogo, anchoLogo, altoLogo);
   }
+  if(fotos.firma) dibujarFirma(ctx, fotos.firma, u, FIRMA.x * u, FIRMA.y * u, datos.color_filete);
 }
 
 /* Lámina suelta del carrusel: la foto a sangre, ocupando el cuadro entero,
@@ -527,6 +766,7 @@ export async function esperarTipografias(){
   await Promise.all([
     document.fonts.load('900 100px "Inter Tight"'),
     document.fonts.load('500 100px "Inter Tight"'),
+    document.fonts.load('700 100px "Inter Tight"'),
     document.fonts.load('700 100px "Poppins"'),
     document.fonts.load('900 100px "Poppins"'),
   ]);
@@ -559,7 +799,7 @@ function entrada(avance, desde, dura){
    titular, filete, etiqueta y logo— sobre fondo transparente. Así la vista
    previa puede poner esta capa arriba del video crudo y el texto se ve
    cambiar mientras se escribe, sin tener que volver a quemar nada. */
-export function dibujarReel(ctx, datos, medio, logo, ancho, alto, avance = 1, soloEncima = false){
+export function dibujarReel(ctx, datos, medio, logo, ancho, alto, avance = 1, soloEncima = false, firma = null){
   const u = ancho / REEL.ancho;
   const R = REEL;
 
@@ -576,6 +816,10 @@ export function dibujarReel(ctx, datos, medio, logo, ancho, alto, avance = 1, so
   // fundido al color del medio, para que el texto se lea
   ctx.fillStyle = degradado(ctx, datos, 0, 0, ancho, alto, R.degradado);
   ctx.fillRect(0, 0, ancho, alto);
+
+  // quién publica: arriba, pero más abajo que en la placa, porque en los
+  // reels Instagram pone su barra encima de la parte de arriba del video
+  if(firma) dibujarFirma(ctx, firma, ancho / LIENZO, R.margen * u, 150 * u, datos.color_filete);
 
   const px = R.titular * u;
   const interlinea = px * R.interlinea;
@@ -666,4 +910,248 @@ export function dibujarReel(ctx, datos, medio, logo, ancho, alto, avance = 1, so
     ctx.fillText(texto, xE + E.padX * u, yE + E.padY * u + metE.mayuscula);
     ctx.restore();
   }
+}
+
+
+/* ------------------------------------------------------------------ */
+/* placa con voz                                                       */
+/* ------------------------------------------------------------------ */
+
+/* La placa de noticia hecha video: la misma foto, el mismo titular, y una
+   franja de reproductor arriba de la etiqueta con un ecualizador que se
+   mueve con la voz. Todo lo que no se mueve se dibuja una sola vez y cada
+   cuadro solo lo copia: así armar treinta cuadros por segundo sale barato,
+   y el video no depende de lo rápido que sea el aparato. */
+export const VOZ = {
+  ritmo: 30,                  // cuadros por segundo, siempre los mismos
+  bandas: 12,                 // bandas del ecualizador; se dibujan en espejo: 23 barras
+  acercar: 0.07,              // la foto crece un 7 % de punta a punta
+  /* El titular cede lugar a la franja: uno muy largo se achica antes de
+     subir hasta acá, para que la franja no termine encima de las caras. */
+  tituloArriba: 2050,
+  franja: { alto: 300, separacion: 40, mic: 118, anillo: 12, aire: 70, reloj: 66 },
+  // la entrada, en segundos
+  entrada: { franja: [0.15, 0.6], etiqueta: [0.25, 0.55], filete: [0.35, 0.6],
+             lineas: 0.45, entreLineas: 0.11, linea: 0.5, sube: 70 },
+};
+
+const lienzoNuevo = (w, h) => {
+  /* Un lienzo de la página y no uno fuera de pantalla cuando se puede: el
+     de fuera de pantalla no siempre respeta el espaciado entre letras, y el
+     titular salía distinto que en la placa. */
+  if(typeof document !== 'undefined'){
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    return c;
+  }
+  return new OffscreenCanvas(w, h);
+};
+
+const minutos = (s) => {
+  const t = Math.max(0, Math.floor(s));
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+};
+
+/* Cuándo termina de entrar el titular: cuando llega la última línea. */
+function finDeEntrada(lineas){
+  const E = VOZ.entrada;
+  return E.lineas + Math.max(0, lineas - 1) * E.entreLineas + E.linea;
+}
+
+/* Dónde está cada pieza del titular en el segundo `t` de la entrada. */
+function entradaVoz(t){
+  const E = VOZ.entrada;
+  const tramo = ([a, b]) => suave((t - a) / (b - a));
+  const etiqueta = tramo(E.etiqueta);
+  return {
+    linea: (i) => {
+      const e = suave((t - E.lineas - i * E.entreLineas) / E.linea);
+      return { dy: (1 - e) * E.sube, alfa: e };
+    },
+    etiqueta: { dy: (1 - etiqueta) * E.sube * 0.6, alfa: etiqueta },
+    filete: tramo(E.filete),
+  };
+}
+
+/* Un micrófono simple, en el color que se lea sobre el filete. */
+function dibujarMic(ctx, cx, cy, s, color){
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = s * 0.17;
+  const w = s * 0.64;
+  ctx.beginPath();
+  ctx.roundRect(cx - w / 2, cy - s * 0.98, w, s * 1.12, w / 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx, cy - s * 0.2, s * 0.6, 0.08 * Math.PI, 0.92 * Math.PI);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + s * 0.42);
+  ctx.lineTo(cx, cy + s * 0.78);
+  ctx.moveTo(cx - s * 0.36, cy + s * 0.78);
+  ctx.lineTo(cx + s * 0.36, cy + s * 0.78);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* La franja del reproductor: el micrófono que late con la voz y marca cuánto
+   va, el ecualizador, y el tiempo. `bandas` son los niveles del momento, de
+   0 a 1, de la más grave a la más aguda; sin audio todavía se dibuja una
+   onda de muestra, para ver el diseño. */
+function dibujarFranja(ctx, datos, u, abajo, t, duracion, bandas, volumen, aparece){
+  if(aparece <= 0) return;
+  const F = VOZ.franja;
+  const alto = F.alto * u;
+  const cy = abajo - F.separacion * u - alto / 2;
+  const r = F.mic * u;
+  const cx = MEDIDAS.pie.x * u + r;
+  const voz = Math.min(1, Math.max(0, volumen || 0));
+
+  const aro = r + F.anillo * u * 1.4;
+  const derecha = (LIENZO - MEDIDAS.pie.margenDerecho) * u;
+
+  ctx.save();
+  ctx.globalAlpha = aparece;
+  ctx.translate(0, (1 - aparece) * 50 * u);
+
+  /* Una píldora oscura y translúcida debajo, como una nota de voz: sin
+     ella, sobre una foto clara las barras blancas no se veían. */
+  const altoPildora = (aro + F.anillo * u) * 2 + 36 * u;
+  ctx.beginPath();
+  ctx.roundRect(cx - altoPildora / 2, cy - altoPildora / 2,
+    derecha + 56 * u - (cx - altoPildora / 2), altoPildora, altoPildora / 2);
+  ctx.fillStyle = 'rgba(12,10,16,0.42)';
+  ctx.fill();
+
+  // el latido: un halo que crece y se aclara cuando hay voz
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * (1.18 + 0.34 * voz), 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(255,255,255,${(0.08 + 0.2 * voz).toFixed(3)})`;
+  ctx.fill();
+
+  // cuánto va: un aro blanco alrededor del micrófono
+  const progreso = duracion > 0 ? Math.min(1, Math.max(0, t / duracion)) : 0;
+  ctx.lineWidth = F.anillo * u;
+  ctx.beginPath();
+  ctx.arc(cx, cy, aro, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+  ctx.stroke();
+  if(progreso > 0){
+    ctx.beginPath();
+    ctx.arc(cx, cy, aro, -Math.PI / 2, -Math.PI / 2 + progreso * Math.PI * 2);
+    ctx.strokeStyle = '#fff';
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  }
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = datos.color_filete;
+  ctx.fill();
+  dibujarMic(ctx, cx, cy, r * 0.5, textoSobre(datos.color_filete));
+
+  // el tiempo, a la derecha
+  const pxReloj = F.reloj * u;
+  // el total redondeado: un audio de 11,998 s es «0:12», no «0:11»
+  const texto = `${minutos(t)} / ${minutos(Math.round(duracion))}`;
+  const metReloj = metricas(ctx, TIPOS.etiqueta, pxReloj);
+  const anchoReloj = anchoDe(ctx, `${minutos(Math.round(duracion))} / ${minutos(Math.round(duracion))}`, TIPOS.etiqueta, pxReloj, 0);
+  ctx.font = fuente(TIPOS.etiqueta, pxReloj);
+  ctx.letterSpacing = '0px';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.fillText(texto, derecha, cy + metReloj.mayuscula / 2);
+  ctx.textAlign = 'left';
+
+  // el ecualizador: las bandas en espejo, las graves al medio
+  const B = VOZ.bandas;
+  const total = B * 2 - 1;
+  const x0 = cx + aro + F.anillo * u + F.aire * u;
+  const x1 = derecha - anchoReloj - F.aire * u;
+  const paso = (x1 - x0) / total;
+  const ancho = paso * 0.62;
+  const mitad = alto / 2 * 0.94;
+  for(let k = 0; k < total; k++){
+    const b = Math.abs(k - (B - 1));
+    const nivel = bandas
+      ? Math.min(1, Math.max(0, bandas[b]))
+      : 0.18 + 0.55 * Math.abs(Math.sin(k * 0.9 + 0.6)) * (1 - b / B * 0.6);
+    const h = Math.max(ancho, nivel * mitad * 2);
+    ctx.fillStyle = `rgba(255,255,255,${(0.6 + 0.4 * nivel).toFixed(3)})`;
+    ctx.beginPath();
+    ctx.roundRect(x0 + k * paso + (paso - ancho) / 2, cy - h / 2, ancho, h, ancho / 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* Arma la placa con voz y devuelve con qué dibujar cada cuadro.
+   `cuadro(ctx, t, bandas, volumen)` dibuja el segundo `t`, con los niveles
+   de la voz en ese momento. `portada` es un buen segundo para la tapa:
+   cuando el titular ya terminó de entrar. */
+export function prepararVoz(datos, fotos, ancho, duracion){
+  const u = ancho / LIENZO;
+  const alto = altoDe(ancho);
+  const caja = cajaFoto(u, alto);
+  const Z = 1 + VOZ.acercar;
+
+  /* La foto, dibujada una vez ya agrandada: acercarla en cada cuadro es
+     solo copiarla un poco más chica. Recomponerla cada vez —con el fondo
+     difuminado de «completa», que es lo más caro del dibujo— no llegaba a
+     treinta cuadros por segundo en un teléfono. */
+  const capaFoto = lienzoNuevo(Math.round(ancho * Z), Math.round(alto * Z));
+  fotoNoticia(capaFoto.getContext('2d'), datos, fotos, u * Z, alto * Z);
+
+  const capaFundido = lienzoNuevo(ancho, alto);
+  const cf = capaFundido.getContext('2d');
+  fundidoNoticia(cf, datos, u, alto);
+  if(fotos.logo){
+    const L = MEDIDAS.logo;
+    const [anchoLogo, altoLogo] = medidaLogo(fotos.logo, u);
+    cf.drawImage(fotos.logo, (ancho - anchoLogo) / 2, alto - (L.abajo * u) - altoLogo, anchoLogo, altoLogo);
+  }
+
+  if(fotos.firma) dibujarFirma(cf, fotos.firma, u, FIRMA.x * u, FIRMA.y * u, datos.color_filete);
+
+  const capaTexto = lienzoNuevo(ancho, alto);
+  const lugar = textoNoticia(capaTexto.getContext('2d'), datos, u, alto, VOZ.tituloArriba);
+  const termina = finDeEntrada(lugar.lineas);
+
+  // se acerca hacia un poco arriba del centro, que es donde suelen estar las caras
+  const centroX = caja.x + caja.ancho / 2;
+  const centroY = caja.y + caja.alto * 0.42;
+
+  return {
+    alto,
+    finEntrada: termina,
+    portada: Math.max(0, Math.min(duracion - 0.1, termina + 0.3)),
+    cuadro(ctx, t, bandas = null, volumen = 0){
+      ctx.save();
+      ctx.letterSpacing = '0px';
+      ctx.fillStyle = datos.color_fondo;
+      ctx.fillRect(0, 0, ancho, alto);
+
+      const a = duracion > 0 ? Math.min(1, Math.max(0, t / duracion)) : 0;
+      const s = 1 + VOZ.acercar * a * a * (3 - 2 * a);   // arranca y termina sin tirón
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(caja.x, caja.y, caja.ancho, caja.alto);
+      ctx.clip();
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(capaFoto, centroX * (1 - s), centroY * (1 - s), ancho * s, alto * s);
+      ctx.restore();
+
+      ctx.drawImage(capaFundido, 0, 0);
+      if(t < termina) textoNoticia(ctx, datos, u, alto, VOZ.tituloArriba, entradaVoz(t));
+      else ctx.drawImage(capaTexto, 0, 0);
+
+      const [d0, d1] = VOZ.entrada.franja;
+      dibujarFranja(ctx, datos, u, lugar.arribaEtiqueta, t, duracion, bandas, volumen,
+        suave((t - d0) / (d1 - d0)));
+      ctx.restore();
+    },
+  };
 }
